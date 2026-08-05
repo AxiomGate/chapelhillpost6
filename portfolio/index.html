@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AxiomGate Labs — Project Portfolio</title>
+  <meta name="description" content="A working catalog of AxiomGate projects — cybersecurity tooling, home-server automation, client sites, and everything in between. Click a project to see what it is and what problem it solves." />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23f5a623'/%3E%3Ctext x='16' y='22' font-family='Arial,sans-serif' font-size='14' font-weight='800' text-anchor='middle' fill='%2310131a'%3EAG%3C/text%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+
+<header id="site-header">
+  <div class="container header-inner">
+    <div class="brand">
+      <div class="brand-mark">AG</div>
+      <div>AxiomGate <span class="dim">Labs</span></div>
+    </div>
+    <div class="header-search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+      <input type="text" id="search-input" placeholder="Search projects, tech, or keywords…" autocomplete="off" />
+    </div>
+  </div>
+</header>
+
+<section id="hero">
+  <div class="container">
+    <div class="hero-eyebrow"><span class="dot"></span> Project Portfolio</div>
+    <h1 class="hero-title">Everything I've built, in one place.</h1>
+    <p class="hero-sub">Cybersecurity tooling, home-server automation, client websites, and a few things built just for my kids. Click any project to see what it actually is and what problem it solves.</p>
+    <div class="stats-row" id="stats-row"></div>
+  </div>
+</section>
+
+<div id="filter-bar">
+  <div class="container">
+    <div class="filter-pills" id="filter-pills"></div>
+  </div>
+</div>
+
+<main id="project-grid" class="container"></main>
+
+<div id="modal-backdrop">
+  <div class="modal" id="modal" role="dialog" aria-modal="true">
+    <button class="modal-close" id="modal-close" aria-label="Close">✕</button>
+    <div id="modal-content"></div>
+  </div>
+</div>
+
+<footer>
+  <div class="container">
+    <p class="footer-note">
+      <strong>Also in the homelab:</strong> a few self-hosted open-source tools that run alongside these projects but weren't built from scratch here — including an UnPoller/Prometheus/Grafana stack for UniFi network monitoring. They're deployed and maintained, not authored, so they're left off the list above.
+    </p>
+    <div class="footer-bottom">© <span id="year"></span> AxiomGate. Built with plain HTML, CSS, and JavaScript — no framework, no build step.</div>
+  </div>
+</footer>
+
+<script src="js/data.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
