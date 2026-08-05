@@ -1,9 +1,0 @@
-services:
-  project-portfolio:
-    build: .
-    image: project-portfolio:latest
-    container_name: project-portfolio
-    restart: unless-stopped
-    ports:
-      # host:container — change the host port (7000) if it's already taken on your Unraid box
-      - "7000:80"
