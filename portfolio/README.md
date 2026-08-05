@@ -37,17 +37,17 @@ Add, remove, or reorder entries in the `PROJECTS` array — the page re-renders 
 1. Install the **Docker Compose Manager** plugin from the Unraid Community Applications store, if you don't already have it.
 2. Copy this `portfolio/` folder onto your Unraid box (e.g. via the array share, `/mnt/user/appdata/axiomgate-labs-src/`, or `git clone` directly on the box).
 3. In the Compose Manager UI, create a new stack pointing at this folder (it will pick up `docker-compose.yml`).
-4. Bring the stack up. It builds the image from the included `Dockerfile` and starts nginx serving the site on port **8090** (host) → **80** (container).
-5. Visit `http://<your-unraid-ip>:8090`.
+4. Bring the stack up. It builds the image from the included `Dockerfile` and starts nginx serving the site on port **7000** (host) → **80** (container).
+5. Visit `http://<your-unraid-ip>:7000`.
 
-Change the host port in `docker-compose.yml` first if 8090 is already in use on your box.
+Change the host port in `docker-compose.yml` first if 7000 is already in use on your box.
 
 ### Option B — plain `docker` commands
 
 ```bash
 cd portfolio
 docker build -t axiomgate-labs-portfolio .
-docker run -d --name axiomgate-labs-portfolio --restart unless-stopped -p 8090:80 axiomgate-labs-portfolio
+docker run -d --name axiomgate-labs-portfolio --restart unless-stopped -p 7000:80 axiomgate-labs-portfolio
 ```
 
 ### Option C — Unraid's built-in Docker tab, from the image
@@ -56,7 +56,7 @@ If you'd rather not use Compose Manager: build and push the image to a registry 
 
 ### Putting it behind a domain / HTTPS
 
-This container only serves plain HTTP on the port you map. For a real domain and TLS, put it behind a reverse proxy you're already running on Unraid (Nginx Proxy Manager, SWAG, Traefik, etc.) and point a proxy host at `http://<unraid-ip>:8090`.
+This container only serves plain HTTP on the port you map. For a real domain and TLS, put it behind a reverse proxy you're already running on Unraid (Nginx Proxy Manager, SWAG, Traefik, etc.) and point a proxy host at `http://<unraid-ip>:7000`.
 
 ### Updating after editing `data.js`
 
