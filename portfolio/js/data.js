@@ -1,4 +1,4 @@
-/* AxiomGate Labs — project portfolio data
+/* Project Portfolio — project data
    Edit this file to add, remove, or update projects. No build step required. */
 
 const CATEGORIES = [

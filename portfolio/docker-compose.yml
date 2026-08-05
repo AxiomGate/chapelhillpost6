@@ -1,8 +1,8 @@
 services:
-  axiomgate-labs:
+  project-portfolio:
     build: .
-    image: axiomgate-labs-portfolio:latest
-    container_name: axiomgate-labs-portfolio
+    image: project-portfolio:latest
+    container_name: project-portfolio
     restart: unless-stopped
     ports:
       # host:container — change the host port (7000) if it's already taken on your Unraid box

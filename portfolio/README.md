@@ -1,11 +1,10 @@
-# AxiomGate Labs — Project Portfolio
+# Project Portfolio
 
 A standalone, static project-portfolio site. Click a project name to see what it is and what problem it solves. No framework, no build step — plain HTML, CSS, and JavaScript, same as the rest of the AxiomGate sites.
 
 ## Local preview
 
 ```bash
-cd portfolio
 python3 -m http.server 8080
 # open http://localhost:8080
 ```
@@ -35,7 +34,7 @@ Add, remove, or reorder entries in the `PROJECTS` array — the page re-renders 
 ### Option A — Docker Compose Manager plugin (recommended)
 
 1. Install the **Docker Compose Manager** plugin from the Unraid Community Applications store, if you don't already have it.
-2. Copy this `portfolio/` folder onto your Unraid box (e.g. via the array share, `/mnt/user/appdata/axiomgate-labs-src/`, or `git clone` directly on the box).
+2. Copy this repo onto your Unraid box (e.g. via the array share, `/mnt/user/appdata/project-portfolio-src/`, or `git clone` directly on the box).
 3. In the Compose Manager UI, create a new stack pointing at this folder (it will pick up `docker-compose.yml`).
 4. Bring the stack up. It builds the image from the included `Dockerfile` and starts nginx serving the site on port **7000** (host) → **80** (container).
 5. Visit `http://<your-unraid-ip>:7000`.
@@ -45,9 +44,8 @@ Change the host port in `docker-compose.yml` first if 7000 is already in use on 
 ### Option B — plain `docker` commands
 
 ```bash
-cd portfolio
-docker build -t axiomgate-labs-portfolio .
-docker run -d --name axiomgate-labs-portfolio --restart unless-stopped -p 7000:80 axiomgate-labs-portfolio
+docker build -t project-portfolio .
+docker run -d --name project-portfolio --restart unless-stopped -p 7000:80 project-portfolio
 ```
 
 ### Option C — Unraid's built-in Docker tab, from the image

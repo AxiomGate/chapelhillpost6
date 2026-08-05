@@ -1,4 +1,4 @@
-/* AxiomGate Labs — portfolio rendering logic (no framework, no build step) */
+/* Project Portfolio — rendering logic (no framework, no build step) */
 
 (function () {
   'use strict';
