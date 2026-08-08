@@ -1,0 +1,90 @@
+# Feeds the research stage pulls every morning.
+#
+# These are starting points, not verified endpoints. Outlets move their feeds.
+# Run `podcastpipe research --lookback 72` once and read the per-feed item
+# counts it prints: any feed reporting 0 items or an error needs its URL fixed
+# or removing. Ten feeds that work beat thirty that half-work.
+#
+# weight multiplies a story's relevance score. Use it to say "the local paper
+# outranks the wire" without hand-editing results every day.
+
+feeds:
+  # --- Chapel Hill / Orange County ---
+  - name: "Chapelboro"
+    url: "https://chapelboro.com/feed"
+    weight: 2.0
+  - name: "The Daily Tar Heel"
+    url: "https://www.dailytarheel.com/plugin/feeds/rss.xml"
+    weight: 1.3
+  - name: "INDY Week"
+    url: "https://indyweek.com/feed/"
+    weight: 1.2
+  - name: "Town of Chapel Hill"
+    url: "https://www.townofchapelhill.org/Home/Components/RssFeeds/RssFeed/List"
+    weight: 2.0
+  - name: "Orange County NC"
+    url: "https://www.orangecountync.gov/RSSFeed.aspx?ModID=76&CID=All-newsflash.xml"
+    weight: 1.8
+
+  # --- Triangle regional ---
+  - name: "WRAL News"
+    url: "https://www.wral.com/news/rss/142/"
+    weight: 1.0
+  - name: "WUNC"
+    url: "https://www.wunc.org/rss.xml"
+    weight: 1.1
+  - name: "NC Newsline"
+    url: "https://ncnewsline.com/feed/"
+    weight: 1.0
+
+  # --- Veterans desk ---
+  - name: "VA Press Releases"
+    url: "https://news.va.gov/feed/"
+    weight: 1.6
+  - name: "The American Legion"
+    url: "https://www.legion.org/rss/news.xml"
+    weight: 1.6
+  - name: "Military.com Benefits"
+    url: "https://www.military.com/rss-feeds/benefits.xml"
+    weight: 1.4
+  - name: "Stars and Stripes"
+    url: "https://www.stripes.com/rss/news.rss"
+    weight: 1.0
+  - name: "NC Dept. of Military & Veterans Affairs"
+    url: "https://www.milvets.nc.gov/rss.xml"
+    weight: 1.6
+
+# Keyword weights drive relevance scoring. A hit in the headline counts double.
+# Keep the local place names generous -- that is what separates a story about
+# your town from a story about a town with a similar name.
+keywords:
+  "chapel hill": 5.0
+  "orange county": 4.0
+  "carrboro": 3.5
+  "hillsborough": 3.5
+  "unc": 2.5
+  "town council": 3.0
+  "orange county schools": 3.0
+  "chapel hill-carrboro": 3.5
+  "durham": 1.5
+  "triangle": 1.2
+  "north carolina": 1.5
+
+  "veteran": 4.0
+  "veterans affairs": 4.0
+  "american legion": 5.0
+  "va benefits": 4.0
+  "gi bill": 3.5
+  "national guard": 2.5
+  "memorial": 2.0
+  "military": 2.0
+  "post 6": 6.0
+
+  "town hall": 2.0
+  "budget": 1.5
+  "zoning": 1.5
+  "election": 2.0
+  "road closure": 2.0
+  "transit": 1.5
+  "flood": 2.0
+  "storm": 1.5

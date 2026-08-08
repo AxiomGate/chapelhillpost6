@@ -1,0 +1,135 @@
+# Show configuration. Everything the pipeline does is driven from this file.
+# ${VARS} are expanded from the environment (see config/env.example).
+
+show:
+  name: "The Post 6 Daily"
+  tagline: "Local news and veterans' affairs for Chapel Hill and Orange County"
+  host: "Host"                       # your on-air name
+  author_email: "${SHOW_EMAIL}"
+  language: "en-us"
+  timezone: "America/New_York"
+  target_minutes: 18
+
+  # The style guide is pasted straight into the scripting prompt. Be specific
+  # and be blunt; vague guidance produces vague scripts.
+  style_guide: |
+    Plainspoken and warm, never cute. You are talking to neighbors, many of them
+    veterans and their families, most of them over 50. Assume they know the town
+    and do not need it explained to them.
+
+    Lead with what changed today and why it matters to someone in Chapel Hill.
+    Attribute in the sentence. Never speculate about motive. When a story
+    involves a local person by name, stick to what the record says.
+
+    Never editorialize on partisan politics. Post 6 is a nonpartisan
+    organization and the show reflects that.
+
+  segments:
+    - id: cold_open
+      name: "Cold Open"
+      target_seconds: 25
+      instructions: "One or two sentences on the single biggest thing today. No greeting yet."
+    - id: headlines
+      name: "Today's Headlines"
+      target_seconds: 180
+      instructions: "Greeting, date, then three to five items at 30-45 seconds each."
+    - id: deep_dive
+      name: "The Story"
+      target_seconds: 420
+      instructions: "The lead story with real context. What happened, what it means, what comes next."
+    - id: veterans
+      name: "Veterans Desk"
+      target_seconds: 180
+      instructions: "VA news, benefits deadlines, and anything affecting local veterans."
+    - id: post_notes
+      name: "Around the Post"
+      target_seconds: 120
+      instructions: "Post 6 events, meetings, volunteer needs, hall rentals. Keep it practical."
+    - id: outro
+      name: "Outro"
+      target_seconds: 40
+      instructions: "Thanks, where to find the Post, and one line teasing tomorrow."
+
+# Local names and terms the TTS will otherwise mangle. Left side is matched as a
+# whole word; right side is what gets synthesized. Add to this list every time
+# you hear something wrong -- it is the highest-value tuning in the whole config.
+pronunciations:
+  "Post 6": "Post Six"
+  "UNC": "U N C"
+  "NCDOT": "N C D O T"
+  "Chapelboro": "Chapel Borough"
+  "Haw River": "Hah River"
+  "Efland": "EFF-land"
+  "Cedar Falls": "Cedar Falls"
+
+# Silence inserted between blocks. Breathing room between stories.
+block_gap_seconds: 0.4
+
+gpu:
+  avatar: 0     # 3090 #1
+  tts: 1        # 3090 #2
+  llm: 1        # shares with TTS; only used when llm.provider is local
+  whisper: 2    # A1000
+  encode: 2     # A1000
+
+llm:
+  provider: anthropic          # anthropic | local
+  model: claude-sonnet-5
+  local_base_url: "http://localhost:8000/v1"
+  local_model: "Qwen/Qwen3-32B-AWQ"
+  max_tokens: 8000
+  temperature: 0.3
+
+tts:
+  engine: chatterbox           # chatterbox | vibevoice
+  venv: "~/envs/chatterbox"
+  reference_audio: "assets/voice/reference.wav"
+  max_chars_per_chunk: 300
+  crossfade_ms: 40
+  seed: 1234
+  exaggeration: 0.45           # 0.3 calm, 0.5 default, 0.7+ animated
+  cfg_weight: 0.5              # lower tracks the reference more closely
+  sample_rate: 24000
+
+avatar:
+  renderer: musetalk           # musetalk | latentsync | none
+  venv: "~/envs/musetalk"
+  base_loop: "assets/avatar/base_loop.mp4"
+  fps: 25
+  bbox_shift: 0                # nudge the mouth region if lips read too closed
+  chunk_seconds: 120
+
+video:
+  width: 1920
+  height: 1080
+  fps: 25
+  encoder: h264_nvenc          # Ampere has no AV1 encode; H.264 is the right pick
+  preset: p5
+  cq: 21
+  background: "assets/brand/background.png"
+  intro: "assets/brand/intro.mp4"
+  outro: "assets/brand/outro.mp4"
+  burn_captions: true
+
+audio:
+  podcast_lufs: -16.0          # Apple/Spotify guidance for mono spoken word
+  youtube_lufs: -14.0
+  true_peak: -1.5
+  loudness_range: 7.0
+  music_bed: ""                # e.g. assets/brand/bed.mp3
+  music_gain_db: -26.0
+
+publish:
+  youtube_enabled: false       # flip to true once you have run the OAuth flow
+  youtube_client_secrets: "config/youtube_client_secret.json"
+  youtube_token: "config/youtube_token.json"
+  youtube_privacy: "private"   # private until you trust the output; then "public"
+  youtube_category_id: "25"    # News & Politics
+  rss_enabled: true
+  rss_output: "output/feed.xml"
+  site_base_url: "https://alpost6.org"
+  media_base_url: "https://media.alpost6.org/episodes"
+  archive_dir: ""              # NAS or external drive; scratch is not a backup
+
+work_dir: "work"
+output_dir: "output"
