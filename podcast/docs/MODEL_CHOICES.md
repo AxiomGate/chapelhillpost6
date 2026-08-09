@@ -112,7 +112,7 @@ A daily local-news podcast lives or dies on not saying false things about real
 people in your town. Summarizing a dozen sources into a factually tight script
 with correct attribution is precisely where a 32B local model degrades in ways
 that are hard to spot — it stays fluent while quietly inventing a detail. On a
-show carrying the American Legion Post 6 name, that is the expensive failure.
+show running under a client's name, that is the expensive failure.
 
 So: `claude-sonnet-5` for the research brief and the script draft, at roughly
 2–5¢ per episode. Both 3090s stay free for TTS and video, which is what they are

@@ -29,7 +29,7 @@ STAGE_ORDER = ["new", "researched", "scripted", "approved", "voiced", "rendered"
 
 
 def _context(args: argparse.Namespace) -> tuple[Config, Database, str]:
-    config = load_config(args.config)
+    config = load_config(args.config, getattr(args, "client", None))
     database = Database(config.work_dir / "pipeline.db")
     episode_id = args.date or Episode.make_id()
     return config, database, episode_id
@@ -70,8 +70,8 @@ def cmd_research(args: argparse.Namespace) -> int:
     episode = database.get_episode(episode_id) or Episode(id=episode_id, date=episode_id)
     database.upsert_episode(episode)
 
-    print(f"Researching {episode_id}")
-    sources = research_stage.load_sources(config.root / "config" / "sources.yaml")
+    print(f"Researching {episode_id} for {config.label()}")
+    sources = research_stage.load_sources(config.sources_path())
     raw = research_stage.fetch_feeds(sources, args.lookback)
     print(f"  {len(raw)} raw items")
 
@@ -207,6 +207,8 @@ def cmd_captions(args: argparse.Namespace) -> int:
         script_text=script_text,
         width=config.video.width,
         height=config.video.height,
+        font=config.video.caption_font,
+        highlight=config.video.caption_highlight,
     )
     for key, value in artifacts.items():
         database.set_artifact(episode_id, f"captions_{key}", value)
@@ -359,7 +361,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 def cmd_doctor(args: argparse.Namespace) -> int:
     """Check that everything the pipeline needs is actually present."""
-    config = load_config(args.config)
+    config = load_config(args.config, getattr(args, "client", None))
     problems = 0
 
     def check(label: str, ok: bool, detail: str = "") -> None:
@@ -411,7 +413,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 def cmd_gc(args: argparse.Namespace) -> int:
     """Delete intermediates older than N days, keeping masters and metadata."""
-    config = load_config(args.config)
+    config = load_config(args.config, getattr(args, "client", None))
     cutoff = datetime.now() - timedelta(days=args.days)
     keep = {"script.json", "brief.json", "episode.mp4", "episode.mp3"}
     freed = 0
@@ -458,9 +460,35 @@ def _cluster_client(config):
     )
 
 
+def cmd_clients(args: argparse.Namespace) -> int:
+    """List client profiles and their show names."""
+    from .config import list_clients
+
+    config = load_config(args.config)
+    names = list_clients(config.root)
+    if not names:
+        print("No client profiles. Copy clients/example/ to clients/<name>/.")
+        return 0
+
+    print(f"{'CLIENT':<18} {'SHOW':<34} SUBJECT FEEDS")
+    for name in names:
+        try:
+            client_config = load_config(args.config, name)
+            feeds = 0
+            path = client_config.sources_path()
+            if path.exists():
+                import yaml as _yaml
+
+                feeds = len((_yaml.safe_load(path.read_text()) or {}).get("feeds", []) or [])
+            print(f"{name:<18} {client_config.show.name[:34]:<34} {feeds}")
+        except Exception as exc:
+            print(f"{name:<18} {'(config error)':<34} {exc}")
+    return 0
+
+
 def cmd_cluster(args: argparse.Namespace) -> int:
     """Show every worker's health, GPU, VRAM and throughput."""
-    config = load_config(args.config)
+    config = load_config(args.config, getattr(args, "client", None))
     client = _cluster_client(config)
     if client is None:
         print("Cluster mode is off. Set 'enabled: true' in config/cluster.yaml.")
@@ -496,7 +524,7 @@ def cmd_cluster(args: argparse.Namespace) -> int:
 def cmd_review(args: argparse.Namespace) -> int:
     from .review.app import serve
 
-    config = load_config(args.config)
+    config = load_config(args.config, getattr(args, "client", None))
     serve(config, host=args.host, port=args.port)
     return 0
 
@@ -508,7 +536,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="podcastpipe", description="Daily podcast video pipeline"
     )
-    parser.add_argument("--config", help="path to show.yaml", default=None)
+    parser.add_argument("--config", help="path to the base show.yaml", default=None)
+    parser.add_argument(
+        "--client",
+        default=None,
+        help="client profile under clients/ (or set PODCASTPIPE_CLIENT)",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     def add(name: str, handler, help_text: str) -> argparse.ArgumentParser:
@@ -559,6 +592,9 @@ def build_parser() -> argparse.ArgumentParser:
     gc_cmd.add_argument("--days", type=int, default=14)
     gc_cmd.add_argument("--dry-run", action="store_true")
     gc_cmd.set_defaults(handler=cmd_gc)
+
+    clients_cmd = sub.add_parser("clients", help="list configured client profiles")
+    clients_cmd.set_defaults(handler=cmd_clients)
 
     cluster = sub.add_parser("cluster", help="show worker node health")
     cluster.add_argument("--timeout", type=int, default=5)

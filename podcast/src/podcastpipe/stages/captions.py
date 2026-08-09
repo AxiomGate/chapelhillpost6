@@ -179,7 +179,7 @@ def transcribe(
 
     ``initial_prompt`` should be a slice of the script: it biases spelling
     toward the proper nouns this show actually uses, which is what makes
-    "Chapel Hill" not come back as "chapel hill" or worse.
+    "Springfield" not come back as "springfield" or worse.
     """
     from faster_whisper import WhisperModel
 
@@ -208,6 +208,8 @@ def generate(
     width: int = 1920,
     height: int = 1080,
     device: str = "cuda",
+    font: str = "DejaVu Sans",
+    highlight: str = "3BE8FF",
 ) -> dict[str, str]:
     """Transcribe and write both caption formats."""
     output_dir = Path(output_dir)
@@ -219,7 +221,9 @@ def generate(
     srt_path = output_dir / "captions.srt"
     ass_path = output_dir / "captions.ass"
     srt_path.write_text(to_srt(cues), encoding="utf-8")
-    ass_path.write_text(to_ass(cues, width, height), encoding="utf-8")
+    ass_path.write_text(
+        to_ass(cues, width, height, font=font, highlight=highlight), encoding="utf-8"
+    )
 
     print(f"  {len(words)} words in {len(cues)} cues")
     return {"srt": str(srt_path), "ass": str(ass_path)}

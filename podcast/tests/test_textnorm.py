@@ -81,13 +81,13 @@ class TestNormalization:
         assert "Road" in out
 
     def test_acronyms_are_spelled_out(self):
-        assert "V F W" in normalize_for_tts("The VFW hall reopened.")
+        assert "A C M E" in normalize_for_tts("The ACME group reopened.")
 
     def test_protected_acronyms_stay_whole(self):
         assert "NASA" in normalize_for_tts("NASA confirmed the launch.")
 
     def test_custom_pronunciations_win(self):
-        out = normalize_for_tts("Post 6 meets tonight.", {"Post 6": "Post Six"})
+        out = normalize_for_tts("the show meets tonight.", {"the show": "Post Six"})
         assert "Post Six" in out
         assert "Post six" not in out.replace("Post Six", "")
 

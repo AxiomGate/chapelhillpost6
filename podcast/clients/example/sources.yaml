@@ -1,0 +1,41 @@
+# Feeds for this client only. Nothing here is shared with other clients.
+#
+# These are illustrative, general-interest feeds so the pipeline has something
+# to run against on day one. Replace them with the sources this show actually
+# covers.
+#
+# Verify before trusting: `podcastpipe --client example research --lookback 72`
+# prints a per-feed item count. Any feed reporting 0 items or an error needs its
+# URL fixed or removing. Ten working feeds beat thirty half-working ones.
+#
+# `weight` multiplies a story's relevance score — use it to say "this source
+# outranks that one" without hand-editing results every morning.
+
+feeds:
+  - name: "AP Top News"
+    url: "https://rsshub.app/apnews/topics/apf-topnews"
+    weight: 1.0
+  - name: "Reuters World"
+    url: "https://www.reutersagency.com/feed/?best-topics=world&post_type=best"
+    weight: 1.0
+  - name: "NPR News"
+    url: "https://feeds.npr.org/1001/rss.xml"
+    weight: 1.0
+  - name: "BBC World"
+    url: "https://feeds.bbci.co.uk/news/world/rss.xml"
+    weight: 0.9
+
+# Keyword weights drive relevance scoring. A hit in the headline counts double a
+# hit in the body, so a term appearing in a headline strongly implies the story
+# is genuinely about it.
+#
+# Replace these with the terms that define this show's beat. Be generous with
+# the ones that matter — this is what separates a story your audience cares
+# about from one that merely mentions the topic in passing.
+keywords:
+  "policy": 2.0
+  "regulation": 2.0
+  "report": 1.2
+  "study": 1.2
+  "launch": 1.5
+  "funding": 1.5

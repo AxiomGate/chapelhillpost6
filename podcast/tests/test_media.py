@@ -198,7 +198,7 @@ class TestBrollMatching:
         assert keyword_score("the flag of the post", "flag") == 1
 
     def test_no_overlap(self):
-        assert keyword_score("veterans parade", "franklin-street-traffic") == 0
+        assert keyword_score("residents parade", "franklin-street-traffic") == 0
 
 
 class TestFfmpegCommands:

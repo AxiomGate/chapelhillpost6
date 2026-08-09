@@ -12,7 +12,7 @@ class TestSlugify:
         assert slugify("Council Approves Budget") == "council-approves-budget"
 
     def test_strips_punctuation(self):
-        assert slugify("Post 6: What's Next?!") == "post-6-whats-next"
+        assert slugify("Episode 12: What's Next?!") == "episode-12-whats-next"
 
     def test_never_empty(self):
         assert slugify("!!!") == "untitled"
@@ -43,7 +43,7 @@ class TestScriptFromPayload:
     payload = {
         "title": "Budget night",
         "description": "What the council did.",
-        "tags": ["chapel hill", "budget"],
+        "tags": ["springfield", "budget"],
         "segments": [
             {
                 "id": "cold_open",

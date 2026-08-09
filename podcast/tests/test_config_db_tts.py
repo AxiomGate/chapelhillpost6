@@ -25,7 +25,7 @@ def project(tmp_path):
                 "show": {"name": "Test Show", "target_minutes": 10},
                 "tts": {"max_chars_per_chunk": 100, "reference_audio": "assets/ref.wav"},
                 "gpu": {"avatar": 0, "tts": 1, "encode": 2},
-                "pronunciations": {"Post 6": "Post Six"},
+                "pronunciations": {"the show": "Post Six"},
             }
         ),
         encoding="utf-8",
@@ -58,7 +58,7 @@ class TestConfigLoading:
 
     def test_extra_config_survives_in_raw(self, project):
         config = load_config(project / "config" / "show.yaml")
-        assert config.raw["pronunciations"]["Post 6"] == "Post Six"
+        assert config.raw["pronunciations"]["the show"] == "Post Six"
 
     def test_unknown_key_is_rejected(self, project):
         path = project / "config" / "show.yaml"
@@ -177,7 +177,7 @@ class TestTtsPlanning:
 
     def test_pronunciations_applied(self, project, tmp_path):
         config = load_config(project / "config" / "show.yaml")
-        jobs = plan_chunks(make_script(["Post 6 meets tonight."]), config, tmp_path)
+        jobs = plan_chunks(make_script(["the show meets tonight."]), config, tmp_path)
         assert "Post Six" in jobs[0].text
 
     def test_identical_text_shares_a_cache_path(self, project, tmp_path):

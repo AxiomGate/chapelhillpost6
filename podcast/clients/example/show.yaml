@@ -1,0 +1,83 @@
+# Example client profile.
+#
+# Copy this directory to clients/<your-client>/ and edit. Anything you leave out
+# is inherited from config/show.yaml, so a profile only states what differs —
+# most are 30 lines, not 150.
+#
+#   cp -r clients/example clients/acme
+#   podcastpipe --client acme research
+#
+# Assets resolve from this directory first: clients/acme/assets/voice/reference.wav
+# shadows the base path, so one client's voice and likeness can never be picked
+# up by another.
+
+show:
+  name: "Example Daily"
+  tagline: "A short daily briefing"
+  host: "Alex Rivera"                 # the on-air name, spoken and in the feed
+  author_email: "podcast@example.com"
+  timezone: "America/New_York"
+  target_minutes: 15
+
+  # This is the single highest-leverage field in the profile. Be specific about
+  # register, what to lead with, and what never to do. Vague guidance here
+  # produces bland, interchangeable scripts.
+  style_guide: |
+    Plainspoken and quick. Short sentences, active voice, no throat-clearing.
+    The listener is a practitioner who already knows the basics of this field.
+
+    Lead with what changed and why it matters to someone doing this work today.
+    Attribute inside the sentence. Say plainly when something is unconfirmed or
+    when sources disagree.
+
+    Never hype. If a story is thin, treat it as thin.
+
+  # Override the whole lineup — segments replace rather than merge, so list
+  # every segment you want, in order.
+  segments:
+    - id: cold_open
+      name: "Cold Open"
+      target_seconds: 20
+      instructions: "One sentence on the biggest thing today. No greeting yet."
+    - id: headlines
+      name: "Headlines"
+      target_seconds: 220
+      instructions: "Greeting, date, then three to four items at about 40 seconds each."
+    - id: deep_dive
+      name: "The Story"
+      target_seconds: 420
+      instructions: "The lead story with context: what happened, what it means, what comes next."
+    - id: outro
+      name: "Outro"
+      target_seconds: 30
+      instructions: "Thanks, where to find the show, one line teasing tomorrow."
+
+# Terms this client's show says often that the TTS gets wrong. Spell them how
+# they sound. Add to this every time you hear a mistake — it is the cheapest
+# quality win available.
+pronunciations:
+  "API": "A P I"
+  "SaaS": "sass"
+  "Kubernetes": "koo-ber-NET-eez"
+
+video:
+  # This client's brand colour, used for lower-third straps.
+  accent: "#2F6F7E"
+  caption_highlight: "3BE8FF"
+
+tts:
+  # Tune per host. Lower exaggeration for a calm read, higher for energy.
+  exaggeration: 0.45
+  cfg_weight: 0.5
+
+publish:
+  # Each client uploads to its own YouTube channel, so credentials are per
+  # client. A shared token would put every show on one channel.
+  youtube_enabled: false
+  youtube_client_secrets: "youtube_client_secret.json"
+  youtube_token: "youtube_token.json"
+  youtube_privacy: "private"
+  site_base_url: "https://example.com"
+  media_base_url: "https://media.example.com/episodes"
+  # Point at durable storage. The scratch disk is not a backup.
+  archive_dir: ""

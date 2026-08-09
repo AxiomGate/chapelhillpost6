@@ -53,7 +53,7 @@ def episode(config):
                     Block(
                         id="cold_open-1",
                         text="The budget passed late last night.",
-                        source_urls=["https://chapelboro.com/budget"],
+                        source_urls=["https://example-news.test/budget"],
                         visual={"type": "title_card", "text": "Budget Night"},
                         audio_path="/cached/audio.wav",
                         duration=3.2,
@@ -109,7 +109,7 @@ class TestEpisodeView:
 
     def test_shows_sources_next_to_text(self, client, episode):
         response = client.get(f"/episode/{episode}")
-        assert "chapelboro.com" in response.text
+        assert "example-news.test" in response.text
 
     def test_flags_blocks_without_sources(self, client, episode):
         response = client.get(f"/episode/{episode}")

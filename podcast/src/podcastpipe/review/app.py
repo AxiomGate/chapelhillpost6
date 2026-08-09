@@ -189,7 +189,7 @@ def _domain(url: str) -> str:
 
 STYLE = """
 :root { color-scheme: light dark; --bg:#fbfbfd; --fg:#16181d; --muted:#6b7280;
-  --line:#e3e5ea; --accent:#b31942; --card:#ffffff; }
+  --line:#e3e5ea; --accent:#2F6F7E; --card:#ffffff; }
 @media (prefers-color-scheme: dark) { :root { --bg:#0f1115; --fg:#e8eaf0;
   --muted:#9aa1ad; --line:#242833; --card:#161922; } }
 * { box-sizing:border-box; }
@@ -210,7 +210,7 @@ textarea, input { width:100%; font:inherit; color:inherit; background:transparen
 textarea:focus, input:focus { outline:2px solid var(--accent); outline-offset:1px; }
 .visual { margin-top:.5rem; font:.78rem ui-monospace,monospace; color:var(--muted); }
 .sources { margin-top:.5rem; display:flex; flex-wrap:wrap; gap:.4rem; font-size:.78rem; }
-.sources a { background:rgba(179,25,66,.09); padding:.15rem .45rem; border-radius:4px;
+.sources a { background:rgba(47,111,126,.12); padding:.15rem .45rem; border-radius:4px;
   text-decoration:none; }
 .nosrc { color:#c2410c; }
 .warn { background:rgba(234,179,8,.12); border:1px solid rgba(234,179,8,.4);

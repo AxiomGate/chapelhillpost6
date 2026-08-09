@@ -85,26 +85,26 @@ class TestDedupe:
         stories = [
             story("Council approves budget", "https://a.com/1"),
             story("Fire on Franklin Street", "https://a.com/2"),
-            story("VA expands benefits", "https://a.com/3"),
+            story("Agency expands eligibility", "https://a.com/3"),
         ]
         assert len(dedupe_stories(stories)) == 3
 
 
 class TestScoring:
-    keywords = {"chapel hill": 5.0, "veteran": 4.0}
+    keywords = {"springfield": 5.0, "resident": 4.0}
 
     def test_headline_hit_counts_double(self):
-        in_title = score_story(story("Chapel Hill votes", "u"), self.keywords)
-        in_body = score_story(story("Town votes", "u", "in chapel hill"), self.keywords)
+        in_title = score_story(story("Springfield votes", "u"), self.keywords)
+        in_body = score_story(story("Town votes", "u", "in springfield"), self.keywords)
         assert in_title == in_body * 2
 
     def test_multiple_keywords_accumulate(self):
-        both = score_story(story("Chapel Hill veteran honored", "u"), self.keywords)
+        both = score_story(story("Springfield resident honored", "u"), self.keywords)
         assert both == (5.0 + 4.0) * 2
 
     def test_source_weight_multiplies(self):
-        base = score_story(story("Chapel Hill news", "u"), self.keywords, 1.0)
-        weighted = score_story(story("Chapel Hill news", "u"), self.keywords, 2.0)
+        base = score_story(story("Springfield news", "u"), self.keywords, 1.0)
+        weighted = score_story(story("Springfield news", "u"), self.keywords, 2.0)
         assert weighted == base * 2
 
     def test_no_match_scores_zero(self):

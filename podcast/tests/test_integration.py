@@ -23,11 +23,11 @@ BRIEF_RESPONSE = {
             "title": "Budget approved",
             "priority": 1,
             "summary": "The council approved the budget on a 6-3 vote.",
-            "source_urls": ["https://chapelboro.com/budget"],
+            "source_urls": ["https://example-news.test/budget"],
             "claims": [
                 {
                     "text": "The council approved the budget 6-3.",
-                    "source_urls": ["https://chapelboro.com/budget"],
+                    "source_urls": ["https://example-news.test/budget"],
                 },
                 {
                     "text": "The tax rate rises by one cent.",
@@ -37,19 +37,19 @@ BRIEF_RESPONSE = {
             ],
         },
         {
-            "title": "VA expands benefits",
+            "title": "Agency expands eligibility",
             "priority": 2,
             "summary": "New eligibility rules take effect.",
-            "source_urls": ["https://news.va.gov/benefits"],
+            "source_urls": ["https://example-agency.test/benefits"],
             "claims": [],
         },
     ],
 }
 
 SCRIPT_RESPONSE = {
-    "title": "Budget night in Chapel Hill",
-    "description": "The council approved the 2026 budget. Plus VA benefit changes.",
-    "tags": ["chapel hill", "budget", "veterans"],
+    "title": "Budget night in Springfield",
+    "description": "The council approved the 2026 budget. Plus agency policy changes.",
+    "tags": ["springfield", "budget", "residents"],
     "segments": [
         {
             "id": "cold_open",
@@ -58,7 +58,7 @@ SCRIPT_RESPONSE = {
                 {
                     "text": "**The budget passed** late last night.",
                     "visual": {"type": "title_card", "text": "Budget Night"},
-                    "source_urls": ["https://chapelboro.com/budget"],
+                    "source_urls": ["https://example-news.test/budget"],
                 }
             ],
         },
@@ -74,7 +74,7 @@ SCRIPT_RESPONSE = {
                 {
                     "text": "The council voted six to three, according to the agenda.",
                     "visual": {"type": "lower_third", "text": "Town Council"},
-                    "source_urls": ["https://chapelboro.com/budget"],
+                    "source_urls": ["https://example-news.test/budget"],
                 },
             ],
         },
@@ -89,7 +89,7 @@ def project(tmp_path):
         yaml.safe_dump(
             {
                 "show": {
-                    "name": "The Post 6 Daily",
+                    "name": "Example Daily",
                     "host": "Host",
                     "target_minutes": 18,
                     "segments": [
@@ -124,14 +124,14 @@ def stories():
     return [
         Story(
             title="Council approves 2026 budget",
-            url="https://chapelboro.com/budget",
-            source="Chapelboro",
+            url="https://example-news.test/budget",
+            source="Example Wire",
             summary="A 6-3 vote.",
             score=10.0,
         ),
         Story(
-            title="VA expands benefits eligibility",
-            url="https://news.va.gov/benefits",
+            title="Agency expands eligibility",
+            url="https://example-agency.test/benefits",
             source="VA",
             summary="New rules.",
             score=6.0,
@@ -156,7 +156,7 @@ class TestBriefBuilding:
     def test_clustered_stories_come_first(self, project, stub_llm, stories):
         config = load_config(project / "config" / "show.yaml")
         brief = research_stage.build_brief(config, "2026-08-08", stories)
-        assert brief.stories[0].url == "https://chapelboro.com/budget"
+        assert brief.stories[0].url == "https://example-news.test/budget"
 
     def test_unclustered_stories_are_still_recorded(self, project, stub_llm, stories):
         config = load_config(project / "config" / "show.yaml")
@@ -179,7 +179,7 @@ class TestBriefBuilding:
     def test_prompt_includes_the_source_urls(self, project, stub_llm, stories):
         config = load_config(project / "config" / "show.yaml")
         research_stage.build_brief(config, "2026-08-08", stories)
-        assert "https://chapelboro.com/budget" in stub_llm[0]["user"]
+        assert "https://example-news.test/budget" in stub_llm[0]["user"]
 
     def test_shortlist_is_capped(self, project, stub_llm):
         config = load_config(project / "config" / "show.yaml")
@@ -198,7 +198,7 @@ class TestScriptGeneration:
     def test_script_structure(self, project, stub_llm, stories):
         config = load_config(project / "config" / "show.yaml")
         script = script_stage.generate_script(config, self._brief(config, stories))
-        assert script.title == "Budget night in Chapel Hill"
+        assert script.title == "Budget night in Springfield"
         assert [s.id for s in script.segments] == ["cold_open", "headlines"]
 
     def test_markdown_and_labels_stripped(self, project, stub_llm, stories):

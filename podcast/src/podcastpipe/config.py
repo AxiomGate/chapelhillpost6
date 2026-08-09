@@ -105,6 +105,10 @@ class VideoConfig:
     intro: str = "assets/brand/intro.mp4"
     outro: str = "assets/brand/outro.mp4"
     burn_captions: bool = True
+    # Per-client branding. Neutral defaults; every client overrides these.
+    accent: str = "#2F6F7E"
+    caption_font: str = "DejaVu Sans"
+    caption_highlight: str = "3BE8FF"
 
 
 @dataclass
@@ -128,14 +132,14 @@ class PublishConfig:
     youtube_category_id: str = "25"  # News & Politics
     rss_enabled: bool = True
     rss_output: str = "output/feed.xml"
-    site_base_url: str = "https://alpost6.org"
-    media_base_url: str = "https://media.alpost6.org/episodes"
+    site_base_url: str = "https://example.com"
+    media_base_url: str = "https://media.example.com/episodes"
     archive_dir: str = ""
 
 
 @dataclass
 class ShowConfig:
-    name: str = "The Post 6 Daily"
+    name: str = "Example Daily"
     tagline: str = ""
     host: str = "Host"
     author_email: str = ""
@@ -160,14 +164,81 @@ class Config:
     work_dir: Path
     output_dir: Path
     raw: dict[str, Any] = field(default_factory=dict)
+    client: str = ""
+    client_dir: Path | None = None
 
     def path(self, value: str) -> Path:
-        """Resolve a config path against the project root unless absolute."""
+        """Resolve a config path, preferring the active client's directory.
+
+        Client assets shadow the base ones: ``assets/voice/reference.wav``
+        resolves to ``clients/<name>/assets/voice/reference.wav`` when that file
+        exists, and falls back to the repo root otherwise. That fallback is what
+        lets shared furniture (a default background, a stock bumper) live in one
+        place while a client's voice and likeness never leak across tenants.
+        """
         expanded = Path(value).expanduser()
-        return expanded if expanded.is_absolute() else (self.root / expanded)
+        if expanded.is_absolute():
+            return expanded
+        if self.client_dir is not None:
+            candidate = self.client_dir / expanded
+            if candidate.exists():
+                return candidate
+        return self.root / expanded
+
+    def client_path(self, value: str) -> Path:
+        """Resolve strictly inside the client directory, whether or not it
+        exists. Use when writing new client-owned files."""
+        base = self.client_dir if self.client_dir is not None else self.root
+        expanded = Path(value).expanduser()
+        return expanded if expanded.is_absolute() else (base / expanded)
+
+    def sources_path(self) -> Path:
+        """Feed list for the active client, falling back to the base template.
+
+        Each client researches its own subject, so this almost always resolves
+        into the client directory; the base file exists only as a starting
+        template.
+        """
+        if self.client_dir is not None:
+            candidate = self.client_dir / "sources.yaml"
+            if candidate.exists():
+                return candidate
+        return self.root / "config" / "sources.yaml"
+
+    def label(self) -> str:
+        """Human label for logs and the review UI."""
+        return f"{self.show.name}" + (f" [{self.client}]" if self.client else "")
 
     def episode_dir(self, episode_id: str) -> Path:
         return self.work_dir / episode_id
+
+
+def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Merge ``override`` onto ``base``, recursing into nested mappings.
+
+    Lists replace rather than concatenate. A client redefining ``segments``
+    means "this is my lineup", not "append mine to the default one" — appending
+    would silently give them both.
+    """
+    result = dict(base)
+    for key, value in (override or {}).items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def list_clients(root: Path) -> list[str]:
+    """Client profile names, i.e. directories under ``clients/`` holding a
+    show.yaml."""
+    clients_dir = root / "clients"
+    if not clients_dir.is_dir():
+        return []
+    return sorted(
+        p.name for p in clients_dir.iterdir()
+        if p.is_dir() and (p / "show.yaml").exists()
+    )
 
 
 def _section(data: dict[str, Any], key: str, cls: type) -> Any:
@@ -181,19 +252,55 @@ def _section(data: dict[str, Any], key: str, cls: type) -> Any:
     return cls(**raw)
 
 
-def load_config(path: str | Path | None = None) -> Config:
-    """Load show.yaml into a Config. Defaults to ``config/show.yaml``."""
+def _read_yaml(path: Path) -> dict[str, Any]:
+    with path.open("r", encoding="utf-8") as handle:
+        data = yaml.safe_load(handle) or {}
+    if not isinstance(data, dict):
+        raise ConfigError(f"{path} must contain a YAML mapping")
+    return data
+
+
+def load_config(path: str | Path | None = None, client: str | None = None) -> Config:
+    """Load the base config, then deep-merge the active client's profile.
+
+    The client comes from the ``client`` argument, else ``PODCASTPIPE_CLIENT``.
+    With neither, the base config is used alone — useful for smoke tests, but it
+    carries no branding by design, so real runs should always name a client.
+
+    Environment expansion happens *after* the merge so a client can set
+    placeholders the base file references.
+    """
     if path is None:
         root = Path(__file__).resolve().parents[2]
         path = root / "config" / "show.yaml"
     path = Path(path).resolve()
     root = path.parents[1]
 
-    with path.open("r", encoding="utf-8") as handle:
-        data = expand_env(yaml.safe_load(handle) or {})
+    data = _read_yaml(path)
 
-    if not isinstance(data, dict):
-        raise ConfigError(f"{path} must contain a YAML mapping")
+    client = client or os.environ.get("PODCASTPIPE_CLIENT", "") or ""
+    client_dir: Path | None = None
+    if client:
+        client_dir = root / "clients" / client
+        client_config = client_dir / "show.yaml"
+        if not client_config.exists():
+            available = list_clients(root)
+            raise ConfigError(
+                f"no client profile at {client_config}. "
+                + (f"Available: {', '.join(available)}" if available
+                   else "Create one by copying clients/example/.")
+            )
+        data = deep_merge(data, _read_yaml(client_config))
+
+    data = expand_env(data)
+
+    # Each client gets its own work and output trees, so two shows running the
+    # same day cannot collide on an episode id.
+    work_dir = root / (data.get("work_dir") or "work")
+    output_dir = root / (data.get("output_dir") or "output")
+    if client:
+        work_dir = work_dir / client
+        output_dir = output_dir / client
 
     return Config(
         root=root,
@@ -205,7 +312,9 @@ def load_config(path: str | Path | None = None) -> Config:
         video=_section(data, "video", VideoConfig),
         audio=_section(data, "audio", AudioConfig),
         publish=_section(data, "publish", PublishConfig),
-        work_dir=root / (data.get("work_dir") or "work"),
-        output_dir=root / (data.get("output_dir") or "output"),
+        work_dir=work_dir,
+        output_dir=output_dir,
         raw=data,
+        client=client,
+        client_dir=client_dir,
     )

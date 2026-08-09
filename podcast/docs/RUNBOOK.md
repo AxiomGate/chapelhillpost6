@@ -123,7 +123,7 @@ be reused.
 Cron does research and drafting at 4:30am:
 
 ```
-30 4 * * * /home/you/chapelhillpost6/podcast/scripts/daily.sh >> ~/podcast-cron.log 2>&1
+30 4 * * * /opt/podcastpipe/scripts/daily.sh >> ~/podcast-cron.log 2>&1
 ```
 
 You sit down, run `podcastpipe review`, spend 10–20 minutes editing, approve, and

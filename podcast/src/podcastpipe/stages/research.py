@@ -39,7 +39,7 @@ Hard rules:
   Never invent, guess, or shorten a URL.
 - Do not add statistics, dates, dollar figures, titles, or quotes that are not
   in the source material.
-- Prefer specific attribution ("according to the Chapel Hill Town Council
+- Prefer specific attribution ("according to the Springfield Town Council
   agenda") over vague attribution ("reports say").
 - If a story is thin or unverifiable, mark it low priority rather than padding.
 

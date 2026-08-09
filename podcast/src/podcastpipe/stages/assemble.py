@@ -191,7 +191,7 @@ def render_lower_third(
     output: Path,
     width: int,
     height: int,
-    accent: str = "#B31942",
+    accent: str = "#2F6F7E",
 ) -> Path:
     """Draw a lower-third strap to a transparent PNG.
 
@@ -255,6 +255,7 @@ def plan_overlays(script: Script, config: Config, output_dir: Path) -> list[Over
                 path,
                 video.width,
                 video.height,
+                accent=video.accent,
             )
             hold = min(6.0, max(2.5, block.duration))
             overlays.append(

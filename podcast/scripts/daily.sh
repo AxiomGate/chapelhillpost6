@@ -5,7 +5,7 @@
 # `podcastpipe finish` does the rest. Wire this to cron or a systemd timer:
 #
 #   crontab -e
-#   30 4 * * * /home/you/chapelhillpost6/podcast/scripts/daily.sh >> /home/you/podcast-cron.log 2>&1
+#   30 4 * * * /opt/podcastpipe/scripts/daily.sh >> /home/you/podcast-cron.log 2>&1
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
