@@ -435,6 +435,64 @@ def cmd_gc(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cluster_client(config):
+    """Build a ClusterClient from config/cluster.yaml, or None if disabled."""
+    import yaml
+
+    from .cluster import ClusterClient, load_nodes
+
+    path = config.root / "config" / "cluster.yaml"
+    if not path.exists():
+        return None
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not raw.get("enabled"):
+        return None
+
+    storage = raw.get("storage", {})
+    scheduling = raw.get("scheduling", {})
+    return ClusterClient(
+        load_nodes(raw.get("nodes", {})),
+        shared_root_local=storage.get("local_root", "/pipeline"),
+        shared_root_container=storage.get("container_root", "/pipeline"),
+        max_failures=int(scheduling.get("max_failures", 3)),
+    )
+
+
+def cmd_cluster(args: argparse.Namespace) -> int:
+    """Show every worker's health, GPU, VRAM and throughput."""
+    config = load_config(args.config)
+    client = _cluster_client(config)
+    if client is None:
+        print("Cluster mode is off. Set 'enabled: true' in config/cluster.yaml.")
+        return 0
+
+    report = client.check_health(timeout=args.timeout)
+    if not report:
+        print("No nodes configured.", file=sys.stderr)
+        return 1
+
+    print(f"{'NODE':<12} {'ROLE':<8} {'STATE':<8} {'GPU':<24} {'VRAM FREE':>10}")
+    problems = 0
+    for name, entry in report.items():
+        ok = entry.get("ok")
+        problems += 0 if ok else 1
+        vram = entry.get("vram_free_mb")
+        print(
+            f"{name:<12} {entry.get('role', ''):<8} {'up' if ok else 'DOWN':<8} "
+            f"{(entry.get('gpu') or '')[:24]:<24} "
+            f"{(f'{vram} MB' if vram else '-'):>10}"
+        )
+        if not ok and entry.get("detail"):
+            print(f"             └─ {entry['detail'][:100]}")
+
+    for role in ("tts", "avatar", "media"):
+        if client.nodes_for(role):
+            print(f"\n{role} capacity: {client.capacity(role)} concurrent slot(s)")
+
+    print(f"\n{problems} node(s) down" if problems else "\nAll nodes healthy.")
+    return 1 if problems else 0
+
+
 def cmd_review(args: argparse.Namespace) -> int:
     from .review.app import serve
 
@@ -501,6 +559,10 @@ def build_parser() -> argparse.ArgumentParser:
     gc_cmd.add_argument("--days", type=int, default=14)
     gc_cmd.add_argument("--dry-run", action="store_true")
     gc_cmd.set_defaults(handler=cmd_gc)
+
+    cluster = sub.add_parser("cluster", help="show worker node health")
+    cluster.add_argument("--timeout", type=int, default=5)
+    cluster.set_defaults(handler=cmd_cluster)
 
     review = sub.add_parser("review", help="serve the approval UI")
     review.add_argument("--host", default="127.0.0.1")

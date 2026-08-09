@@ -1,0 +1,19 @@
+# Media worker — faster-whisper captions and NVENC encoding, on the A1000.
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3.11 python3-pip ffmpeg fonts-dejavu-core curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3.11 -m pip install --no-cache-dir --upgrade pip \
+    && python3.11 -m pip install --no-cache-dir \
+       faster-whisper fastapi uvicorn pydantic pyyaml pillow
+
+# The orchestrator package supplies caption grouping and formatting, so that
+# logic lives in one tested place rather than being reimplemented here.
+COPY src/ /opt/podcastpipe/src/
+COPY cluster/ /opt/worker/
+WORKDIR /opt/worker
+EXPOSE 8082
+CMD ["python3.11", "media_worker.py"]

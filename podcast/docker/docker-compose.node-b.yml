@@ -1,0 +1,46 @@
+# node-b — 10.10.5.16 — RTX 3090
+#
+# Hosts the voice worker only. It mounts node-a's export over NFS at the same
+# in-container path, /pipeline, so job payloads that name files resolve here to
+# the same bytes they do on node-a.
+#
+# On the Unraid host, mount node-a's share first (Unconnected Devices plugin, or
+# in /boot/config/go):
+#   mkdir -p /mnt/remotes/podcast
+#   mount -t nfs -o rw,hard,intr,rsize=131072,wsize=131072 \
+#         10.10.5.15:/mnt/user/podcast /mnt/remotes/podcast
+#
+# Deploy:
+#   docker compose -f docker-compose.node-b.yml up -d
+
+services:
+
+  tts-worker:
+    restart: unless-stopped
+    runtime: nvidia
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.tts
+    container_name: podcast-tts
+    ports: ["8080:8080"]
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "GPU-REPLACE-WITH-NODE-B-3090-UUID"
+      NVIDIA_DRIVER_CAPABILITIES: "compute,utility"
+      REQUIRED_VRAM_MB: "6000"
+      TTS_SEED: "1234"
+      PORT: "8080"
+    volumes:
+      # Same in-container path as every other node. This is the contract.
+      - /mnt/remotes/podcast:/pipeline
+      - /mnt/cache/podcast-scratch:/scratch
+      - /mnt/user/appdata/podcast/chatterbox-models:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request,json,sys; sys.exit(0 if json.load(urllib.request.urlopen('http://localhost:8080/health'))['model_loaded'] else 1)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 240s
+      retries: 3
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }

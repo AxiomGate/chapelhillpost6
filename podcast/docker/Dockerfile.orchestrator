@@ -1,0 +1,15 @@
+# Orchestrator — CPU only. Coordinates the cluster and serves the review page.
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ffmpeg fonts-dejavu-core curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/podcastpipe
+COPY pyproject.toml ./
+COPY src/ ./src/
+RUN pip install --no-cache-dir -e '.[review,publish]'
+
+EXPOSE 8420
+CMD ["podcastpipe", "review", "--host", "0.0.0.0", "--port", "8420"]

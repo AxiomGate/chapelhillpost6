@@ -1,0 +1,106 @@
+# node-a — 10.10.5.15 — RTX 3090 + RTX A1000
+#
+# Hosts the shared export, the orchestrator, the avatar worker (3090) and the
+# media worker (A1000).
+#
+# Deploy on Unraid:
+#   docker compose -f docker-compose.node-a.yml up -d
+#
+# GPU selection uses UUIDs, not indices. Indices reorder across reboots and after
+# any hardware change, which on a two-card box eventually puts the avatar render
+# on the A1000 and wedges it. Get the UUIDs with:
+#   nvidia-smi --query-gpu=index,name,uuid --format=csv
+
+x-common: &common
+  restart: unless-stopped
+  runtime: nvidia
+  networks: [podcast]
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
+services:
+
+  avatar-worker:
+    <<: *common
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.avatar
+    container_name: podcast-avatar
+    ports: ["8081:8081"]
+    environment:
+      # The 3090. Replace with your actual UUID.
+      NVIDIA_VISIBLE_DEVICES: "GPU-REPLACE-WITH-3090-UUID"
+      NVIDIA_DRIVER_CAPABILITIES: "compute,utility,video"
+      REQUIRED_VRAM_MB: "8000"
+      LOCAL_CACHE: "/scratch"
+      MUSETALK_HOME: "/opt/MuseTalk"
+      PORT: "8081"
+    volumes:
+      - /mnt/user/podcast:/pipeline
+      # Node-local NVMe. This is where gigabytes of driving video live so they
+      # never cross the network. Must be a cache/NVMe pool, not the parity array.
+      - /mnt/cache/podcast-scratch:/scratch
+      - /mnt/user/appdata/podcast/musetalk-models:/opt/MuseTalk/models
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request,json,sys; sys.exit(0 if json.load(urllib.request.urlopen('http://localhost:8081/health'))['model_loaded'] else 1)"]
+      interval: 30s
+      timeout: 10s
+      # Generous: MuseTalk takes 60-90s to load, and a failing healthcheck
+      # during startup would restart-loop the container forever.
+      start_period: 300s
+      retries: 3
+
+  media-worker:
+    <<: *common
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.media
+    container_name: podcast-media
+    ports: ["8082:8082"]
+    environment:
+      # The A1000. Deliberately a different card from the avatar worker so
+      # encoding never queues behind a render.
+      NVIDIA_VISIBLE_DEVICES: "GPU-REPLACE-WITH-A1000-UUID"
+      NVIDIA_DRIVER_CAPABILITIES: "compute,utility,video"
+      REQUIRED_VRAM_MB: "2500"
+      WHISPER_MODEL: "large-v3"
+      WHISPER_COMPUTE: "int8_float16"
+      PORT: "8082"
+    volumes:
+      - /mnt/user/podcast:/pipeline
+      - /mnt/cache/podcast-scratch-media:/scratch
+      - /mnt/user/appdata/podcast/whisper-models:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request,json,sys; sys.exit(0 if json.load(urllib.request.urlopen('http://localhost:8082/health'))['model_loaded'] else 1)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 180s
+      retries: 3
+
+  orchestrator:
+    <<: *common
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.orchestrator
+    container_name: podcast-orchestrator
+    # CPU only. It coordinates and serves the review page; it runs no models.
+    runtime: runc
+    ports:
+      - "8420:8420"   # review UI, reachable from any machine on the LAN
+    environment:
+      PODCASTPIPE_CONFIG: "/pipeline/config/show.yaml"
+      PODCASTPIPE_CLUSTER: "/pipeline/config/cluster.yaml"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+      TZ: "America/New_York"
+    volumes:
+      - /mnt/user/podcast:/pipeline
+    depends_on:
+      - avatar-worker
+      - media-worker
+
+networks:
+  podcast:
+    driver: bridge

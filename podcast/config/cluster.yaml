@@ -1,0 +1,71 @@
+# Cluster topology. Set `enabled: false` at the top to run everything on one box.
+#
+# Every worker container mounts the shared Unraid export at /pipeline, whatever
+# its path is on the host. That means a job payload can name a file and every
+# node resolves it to the same bytes.
+
+enabled: true
+
+storage:
+  # Where the orchestrator sees the share. On node-a (10.10.5.15) this is the
+  # Unraid share itself; the orchestrator container mounts it at /pipeline too,
+  # so in practice these match.
+  local_root: "/pipeline"
+  # The path every worker container sees. Do not change without updating the
+  # compose files -- this is the contract that makes paths portable.
+  container_root: "/pipeline"
+  # Node-local scratch inside each worker, for things that must never touch the
+  # network: driving video, per-job temp files. Backed by local NVMe, not the array.
+  scratch: "/scratch"
+
+nodes:
+  tts-b:
+    url: "http://10.10.5.16:8080"
+    role: tts
+    gpu: "RTX 3090 (node-b)"
+    max_concurrent: 1
+
+  avatar-a:
+    url: "http://10.10.5.15:8081"
+    role: avatar
+    gpu: "RTX 3090 (node-a)"
+    max_concurrent: 1
+
+  media-a:
+    url: "http://10.10.5.15:8082"
+    role: media
+    gpu: "RTX A1000 (node-a)"
+    max_concurrent: 1
+
+  # Third server, when it arrives. Add it as a SECOND AVATAR worker rather than
+  # anything else: the avatar render is 30-45 minutes against 4-8 for voice, so
+  # it is the only stage where another card meaningfully shortens the episode.
+  # Two avatar workers roughly halve the longest stage.
+  # avatar-c:
+  #   url: "http://10.10.5.17:8081"
+  #   role: avatar
+  #   gpu: "RTX 3090 (node-c)"
+  #   max_concurrent: 1
+
+scheduling:
+  # Seconds of audio per avatar render window. Larger amortizes per-render
+  # warm-up; smaller starts the avatar sooner and spreads work across more
+  # workers. 120 is a good balance for one or two avatar nodes; drop toward 90
+  # once you have three.
+  window_seconds: 120
+
+  # How long to wait for a busy node before giving up.
+  max_wait_seconds: 900
+
+  # Attempts per job. A second attempt lands on a different node when one is
+  # available, which covers a worker that died mid-episode.
+  attempts: 2
+
+  # Consecutive failures before a node is marked unhealthy and skipped.
+  max_failures: 3
+
+health:
+  # Probe every node before starting an episode. Cheap, and it turns "the render
+  # silently never started" into "node-b is down".
+  check_before_run: true
+  timeout_seconds: 5

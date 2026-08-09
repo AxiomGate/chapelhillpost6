@@ -1,0 +1,27 @@
+# Avatar worker — MuseTalk. Weights are mounted at runtime rather than baked in,
+# so the image stays small and the models survive a rebuild.
+FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3.11 python3.11-venv python3.11-dev python3-pip \
+      ffmpeg git build-essential libgl1 libglib2.0-0 curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3.11 -m pip install --no-cache-dir --upgrade pip
+RUN python3.11 -m pip install --no-cache-dir \
+      torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+
+RUN git clone --depth 1 https://github.com/TMElyralab/MuseTalk /opt/MuseTalk
+RUN python3.11 -m pip install --no-cache-dir -r /opt/MuseTalk/requirements.txt
+
+# mmcv/mmdet/mmpose supply face landmarks and must be installed after torch.
+RUN python3.11 -m pip install --no-cache-dir openmim \
+    && python3.11 -m mim install mmengine "mmcv>=2.0.1" "mmdet>=3.1.0" "mmpose>=1.1.0"
+
+RUN python3.11 -m pip install --no-cache-dir fastapi uvicorn pydantic
+
+COPY cluster/ /opt/worker/
+WORKDIR /opt/worker
+EXPOSE 8081
+CMD ["python3.11", "avatar_worker.py"]
