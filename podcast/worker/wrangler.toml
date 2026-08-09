@@ -1,0 +1,24 @@
+name = "post6-podcast"
+main = "src/index.js"
+compatibility_date = "2026-01-15"
+
+# Fill both ids in after running the create commands in ../README.md.
+# Neither value is a secret: the KV id names the namespace, it does not grant
+# access to it. Subscriber tokens live *inside* the namespace, never in git.
+
+[[kv_namespaces]]
+binding = "SUBSCRIBERS"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+[[r2_buckets]]
+binding = "MEDIA"
+bucket_name = "post6-podcast"
+
+# Serve the feed from your own domain. Requires the zone to be on Cloudflare.
+# Delete this block to use the workers.dev hostname instead.
+# [[routes]]
+# pattern = "feed.alpost6.org"
+# custom_domain = true
+
+[observability]
+enabled = true

@@ -1,0 +1,16 @@
+{
+  "sourceDir": "\\\\MMRUNRAIDNAS\\podcasts",
+  "bucket": "post6-podcast",
+  "kvBinding": "SUBSCRIBERS",
+  "feedOrigin": "https://post6-podcast.YOUR-SUBDOMAIN.workers.dev",
+  "coverArtFile": "",
+  "publishHourUtc": 11,
+  "show": {
+    "title": "Post 6 Daily",
+    "description": "A daily audio update for American Legion Post 6.",
+    "author": "American Legion Post 6",
+    "ownerEmail": "adjutant@alpost6.org",
+    "link": "https://alpost6.org",
+    "language": "en-us"
+  }
+}

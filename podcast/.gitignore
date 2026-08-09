@@ -1,0 +1,9 @@
+# Real config: contains your NAS path and show details, not needed in git.
+podcast.config.json
+
+# Local cache of the feed metadata. R2 holds the authoritative copy, and
+# episode titles stay out of this public repository.
+local/
+
+node_modules/
+.wrangler/
