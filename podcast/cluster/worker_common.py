@@ -19,6 +19,29 @@ import traceback
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+try:
+    from pydantic import BaseModel
+except ImportError:  # pragma: no cover - only when building without the web deps
+    BaseModel = object  # type: ignore[assignment,misc]
+
+
+class Job(BaseModel):  # type: ignore[misc,valid-type]
+    """The job envelope every worker accepts.
+
+    Deliberately schema-less: each worker reads the fields it needs and ignores
+    the rest, so adding a field to one job type does not require touching this
+    file or the other workers.
+
+    This MUST stay at module scope. ``from __future__ import annotations`` turns
+    every annotation into a string, and FastAPI resolves those against the
+    function's ``__globals__`` -- module scope, not enclosing scope. Defined
+    inside ``build_app`` it never resolved, FastAPI silently demoted ``job`` to
+    a query parameter, and every POST /run came back 422 with
+    ``loc: ["query", "job"]`` while /health stayed green.
+    """
+
+    model_config = {"extra": "allow"}
+
 
 def gpu_info() -> dict[str, Any]:
     """Report the visible GPU. Returns placeholders rather than raising when
@@ -99,10 +122,6 @@ def build_app(
     """
     from fastapi import FastAPI
     from fastapi.responses import JSONResponse
-    from pydantic import BaseModel
-
-    class Job(BaseModel):
-        model_config = {"extra": "allow"}
 
     app = FastAPI(title=f"podcastpipe {name}")
     state: dict[str, Any] = {"model": None, "error": "", "stats": WorkerStats()}
