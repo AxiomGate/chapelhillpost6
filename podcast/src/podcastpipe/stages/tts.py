@@ -87,8 +87,61 @@ def pending_jobs(jobs: list[ChunkJob]) -> list[ChunkJob]:
     return pending
 
 
-def synthesize(config: Config, script: Script, episode_dir: Path) -> dict[str, str]:
-    """Run TTS for the whole script. Returns the artifact paths it produced."""
+def _synthesize_via_cluster(cluster, config: Config, reference: Path, todo: list) -> None:
+    """Dispatch each chunk to a warm TTS worker over HTTP.
+
+    Paths cross the wire unchanged: every container mounts the share at the same
+    in-container path, so the worker writes straight into the episode directory
+    and there is nothing to copy back. Only the text goes out and a WAV lands on
+    the share -- which is what keeps this off the 1 GbE budget.
+
+    Sequential on purpose. Each node declares max_concurrent, submit() blocks
+    while they are all busy, and one GPU cannot usefully run two syntheses at
+    once; concurrency belongs across nodes, which submit() already handles.
+    """
+    from ..cluster import ClusterError
+
+    for index, job in enumerate(todo, start=1):
+        try:
+            result = cluster.submit(
+                "tts",
+                {
+                    "id": job.id,
+                    "text": job.text,
+                    "out_path": job.out_path,
+                    "reference_audio": str(reference),
+                    "sample_rate": config.tts.sample_rate,
+                    "exaggeration": config.tts.exaggeration,
+                    "cfg_weight": config.tts.cfg_weight,
+                },
+                timeout=600,
+            )
+        except ClusterError as exc:
+            raise RuntimeError(
+                f"TTS chunk {job.id} ({index}/{len(todo)}) failed on the cluster: {exc}"
+            ) from exc
+
+        # A worker that answers 200 but writes nowhere visible means the share is
+        # mounted at a different path there -- worth saying so rather than
+        # failing later with a missing-file error that looks like a TTS problem.
+        if not Path(job.out_path).exists():
+            raise RuntimeError(
+                f"{result.get('node', 'worker')} reported success for chunk {job.id} "
+                f"but {job.out_path} does not exist. Check that every node mounts "
+                "the shared export at the same in-container path."
+            )
+        if index % 5 == 0 or index == len(todo):
+            print(f"    {index}/{len(todo)} chunks")
+
+
+def synthesize(
+    config: Config, script: Script, episode_dir: Path, cluster=None
+) -> dict[str, str]:
+    """Run TTS for the whole script. Returns the artifact paths it produced.
+
+    With ``cluster`` set, chunks go to the warm TTS worker over HTTP. Without
+    it, they run through a local venv -- the single-machine path.
+    """
     cache_dir = config.work_dir / "_tts_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     audio_dir = episode_dir / "audio"
@@ -108,7 +161,9 @@ def synthesize(config: Config, script: Script, episode_dir: Path) -> dict[str, s
     todo = pending_jobs(jobs)
     print(f"  {len(jobs)} chunks, {len(todo)} to synthesize, {len(jobs) - len(todo)} cached")
 
-    if todo:
+    if todo and cluster is not None:
+        _synthesize_via_cluster(cluster, config, reference, todo)
+    elif todo:
         job_file = episode_dir / "tts_jobs.json"
         job_file.write_text(
             json.dumps(

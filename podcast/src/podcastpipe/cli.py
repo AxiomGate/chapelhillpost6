@@ -159,7 +159,9 @@ def cmd_tts(args: argparse.Namespace) -> int:
 
     print(f"Synthesizing voice for {episode_id}")
     started = time.time()
-    artifacts = tts_stage.synthesize(config, script, episode_dir)
+    artifacts = tts_stage.synthesize(
+        config, script, episode_dir, cluster=_cluster_client(config)
+    )
     script.save(path)  # durations and timeline are now filled in
 
     for key, value in artifacts.items():
@@ -201,15 +203,37 @@ def cmd_captions(args: argparse.Namespace) -> int:
     script_text = Script.load(script_path).full_text() if script_path.exists() else ""
 
     print(f"Generating captions for {episode_id}")
-    artifacts = captions_stage.generate(
-        audio,
-        episode_dir / "captions",
-        script_text=script_text,
-        width=config.video.width,
-        height=config.video.height,
-        font=config.video.caption_font,
-        highlight=config.video.caption_highlight,
-    )
+    cluster = _cluster_client(config)
+    if cluster is not None:
+        # faster-whisper lives in the media worker's image, not the
+        # orchestrator's -- the orchestrator runs no models by design.
+        result = cluster.submit(
+            "media",
+            {
+                "task": "captions",
+                "audio": audio,
+                "out_dir": str(episode_dir / "captions"),
+                "prompt": script_text,
+                "width": config.video.width,
+                "height": config.video.height,
+            },
+            timeout=1800,
+        )
+        artifacts = {"srt": result["srt"], "ass": result["ass"]}
+        print(
+            f"  {result.get('words', 0)} words, {result.get('cues', 0)} cues "
+            f"on {result.get('node', 'worker')}"
+        )
+    else:
+        artifacts = captions_stage.generate(
+            audio,
+            episode_dir / "captions",
+            script_text=script_text,
+            width=config.video.width,
+            height=config.video.height,
+            font=config.video.caption_font,
+            highlight=config.video.caption_highlight,
+        )
     for key, value in artifacts.items():
         database.set_artifact(episode_id, f"captions_{key}", value)
     database.log(episode_id, "captions", "ok", "")
