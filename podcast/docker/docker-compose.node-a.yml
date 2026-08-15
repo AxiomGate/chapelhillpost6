@@ -73,7 +73,12 @@ services:
     # CPU only. It coordinates and serves the review page; it runs no models.
     runtime: runc
     ports:
-      - "8420:8420"   # review UI, reachable from any machine on the LAN
+      # Review UI, reachable from any machine on the LAN. Published on 8421
+      # because node-a already runs another container on 8420; the app still
+      # binds 8420 inside the container. A port collision here does not fail
+      # loudly -- the container sits in `Created`, or starts with no published
+      # port at all, and the UI is simply unreachable.
+      - "8421:8420"
     environment:
       PODCASTPIPE_CONFIG: "/pipeline/config/show.yaml"
       PODCASTPIPE_CLUSTER: "/pipeline/config/cluster.yaml"

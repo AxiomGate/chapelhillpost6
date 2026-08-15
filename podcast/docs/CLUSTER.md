@@ -9,7 +9,7 @@ between stages.
 │  /mnt/user/podcast   ← shared export, NFS           │
 │  /mnt/cache/podcast-scratch  ← local NVMe           │
 │                                                     │
-│  orchestrator   CPU     review UI  :8420            │
+│  orchestrator   CPU     review UI  :8421->:8420     │
 │  tts-worker     3090    Chatterbox :8080            │
 └─────────────────────────────────────────────────────┘
                        │ 1 GbE
@@ -158,9 +158,16 @@ the A1000, where it runs out of memory or crawls. A UUID is burned into the card
 and follows it between machines, so moving a card means moving its value to the
 new variable name — not looking it up again expecting a new number.
 
-Copy `.env.example` to `.env` **on each node**, in the same directory you run
-`docker compose` from, and fill in the UUIDs that node needs. Confirm the
-substitution actually happened before starting anything:
+Copy `.env.example` to `.env` in the checkout's `docker/` directory — **once, on
+the share** — and fill in every node's UUIDs in that one file.
+
+All three nodes run `docker compose` from that same directory over NFS, so a
+per-node `.env` is not a thing: each node's copy overwrites the last one's. The
+variables are namespaced per node precisely so one file can serve all three, and
+each compose file reads only the two or three it needs. The damage from getting
+this wrong is invisible until a container is recreated — the running ones keep
+whatever values they started with — so confirm the substitution before starting
+anything:
 
 ```bash
 docker compose -f docker-compose.node-b.yml config | grep NVIDIA_VISIBLE
@@ -270,7 +277,7 @@ on every avatar node, or they will keep using the old footage.
 
 ```bash
 podcastpipe cluster && podcastpipe research && podcastpipe script
-# review at http://10.10.5.15:8420
+# review at http://10.10.5.15:8421
 podcastpipe finish
 ```
 
