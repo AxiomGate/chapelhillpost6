@@ -93,6 +93,18 @@ class LlmClient:
             {"x-api-key": api_key, "anthropic-version": ANTHROPIC_VERSION},
             timeout,
         )
+        # Check this BEFORE parsing. A response cut off at the token ceiling is
+        # still valid text, so the failure surfaces downstream as an unhelpful
+        # JSON error pointing at whatever character the truncation landed on --
+        # which says nothing about the actual cause.
+        if data.get("stop_reason") == "max_tokens":
+            used = data.get("usage", {}).get("output_tokens", max_tokens)
+            raise LlmError(
+                f"{self.config.llm.model} hit the {max_tokens}-token output ceiling "
+                f"after {used} tokens; the response is truncated. Raise llm.max_tokens "
+                f"in show.yaml, or lower --max-stories to shorten the brief."
+            )
+
         parts = [b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"]
         text = "".join(parts).strip()
         if not text:

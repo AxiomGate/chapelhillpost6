@@ -65,7 +65,10 @@ llm:
   model: claude-sonnet-5
   local_base_url: "http://localhost:8000/v1"
   local_model: "Qwen/Qwen3-32B-AWQ"
-  max_tokens: 8000
+  # A 25-story brief runs well past 8000 and truncates mid-JSON. 16000 is the
+  # sane non-streaming default -- large enough for a full brief or script, small
+  # enough to stay under the SDK's HTTP timeout.
+  max_tokens: 16000
   # Local provider only. Anthropic removed temperature/top_p/top_k on Sonnet 5,
   # Opus 5, Opus 4.7/4.8 and Fable 5 -- sending one is a 400 -- so the Anthropic
   # path ignores this and steers by prompt instead.
