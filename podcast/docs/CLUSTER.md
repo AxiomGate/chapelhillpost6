@@ -216,9 +216,15 @@ per node. Model weights mount from `appdata`, so they survive rebuilds.
 Each avatar node then needs its MuseTalk weights, 9.3 GB, once:
 
 ```bash
-docker exec podcast-avatar python3.11 /pipeline/repo/podcast/scripts/fetch_musetalk_weights.py
+docker exec podcast-avatar sh -c \
+  'python3.11 $(find /pipeline/repo -name fetch_musetalk_weights.py | head -1)'
 docker restart podcast-avatar
 ```
+
+The `find` is deliberate: whether the checkout on the share puts this at
+`/pipeline/repo/scripts/` or `/pipeline/repo/podcast/scripts/` depends on how it
+was cloned, and a wrong path here fails in a way that looks like a missing script
+rather than a missing checkout.
 
 Do not use MuseTalk's own `download_weights.sh`. It prints "All weights have been
 downloaded successfully!" unconditionally, including when nothing transferred —
