@@ -76,10 +76,14 @@ class LlmClient:
                 "ANTHROPIC_API_KEY is not set. Put it in podcast/.env, or set "
                 "llm.provider: local in config/show.yaml to use the on-box model."
             )
+        # No temperature. Anthropic removed the sampling parameters -- temperature,
+        # top_p, top_k -- on Sonnet 5, Opus 5, Opus 4.7/4.8 and Fable 5; sending
+        # any of them is a 400, not a warning. Steer these models by prompting
+        # instead. `temperature` stays in the signature and in show.yaml because
+        # the local provider below still honours it.
         payload = {
             "model": self.config.llm.model,
             "max_tokens": max_tokens,
-            "temperature": temperature,
             "system": system,
             "messages": [{"role": "user", "content": user}],
         }
