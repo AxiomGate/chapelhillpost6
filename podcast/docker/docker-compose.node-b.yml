@@ -1,46 +1,102 @@
-# node-b — 10.10.5.16 — RTX 3090
+# node-b — 10.10.5.16 — 1x RTX 3090 + 1x RTX A1000 — Unraid
 #
-# Hosts the voice worker only. It mounts node-a's export over NFS at the same
-# in-container path, /pipeline, so job payloads that name files resolve here to
-# the same bytes they do on node-a.
+# Avatar worker on the 3090, media worker (captions + NVENC) on the A1000.
 #
-# On the Unraid host, mount node-a's share first (Unconnected Devices plugin, or
-# in /boot/config/go):
+# The A1000 arrived here from node-a on 2026-08-15. Its UUID did not change --
+# UUIDs are burned into the card, not the slot -- so the value that used to be
+# NODE_A_A1000 is now NODE_B_A1000, verbatim. What did change is the bus: it was
+# in an x1 chipset slot behind a USB riser on node-a, training at Gen1 x1
+# (~250 MB/s). Here it gets real lanes, which is what makes it reasonable to run
+# encode on it and not just Whisper.
+#
+# The share lives on node-a and is mounted here over NFS. On the Unraid host:
 #   mkdir -p /mnt/remotes/podcast
-#   mount -t nfs -o rw,hard,intr,rsize=131072,wsize=131072 \
+#   mount -t nfs -o rw,soft,timeo=100,retrans=3,rsize=131072,wsize=131072 \
 #         10.10.5.15:/mnt/user/podcast /mnt/remotes/podcast
 #
+# Inside every container it appears at /pipeline, the same path every other node
+# uses -- that is what makes job payloads portable across nodes.
+#
+# Scratch pools this file expects (create them before first start):
+#   mkdir -p /mnt/cache/podcast-scratch /mnt/cache/podcast-scratch-media
+#
 # Deploy:
-#   docker compose -f docker-compose.node-b.yml up -d
+#   cd /mnt/remotes/podcast/repo/podcast/docker
+#   docker compose -f docker-compose.node-b.yml up -d --build
+
+x-common: &common
+  restart: unless-stopped
+  runtime: nvidia
+  # Reap zombies. Both workers shell out per job; without an init process those
+  # children accumulate as defunct entries.
+  init: true
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
 
 services:
 
-  tts-worker:
-    restart: unless-stopped
-    runtime: nvidia
+  avatar-worker:
+    <<: *common
     build:
       context: ..
-      dockerfile: docker/Dockerfile.tts
-    container_name: podcast-tts
-    ports: ["8080:8080"]
+      dockerfile: docker/Dockerfile.avatar
+    container_name: podcast-avatar
+    ports: ["8081:8081"]
+    mem_limit: 16g
     environment:
-      NVIDIA_VISIBLE_DEVICES: "GPU-REPLACE-WITH-NODE-B-3090-UUID"
-      NVIDIA_DRIVER_CAPABILITIES: "compute,utility"
-      REQUIRED_VRAM_MB: "6000"
-      TTS_SEED: "1234"
-      PORT: "8080"
+      NVIDIA_VISIBLE_DEVICES: "${NODE_B_3090}"
+      NVIDIA_DRIVER_CAPABILITIES: "compute,utility,video"
+      REQUIRED_VRAM_MB: "8000"
+      LOCAL_CACHE: "/scratch"
+      MUSETALK_HOME: "/opt/MuseTalk"
+      PORT: "8081"
     volumes:
-      # Same in-container path as every other node. This is the contract.
       - /mnt/remotes/podcast:/pipeline
+      # Node-local NVMe. Driving video lives here so it never crosses the
+      # network. Must be a cache pool, not the parity array.
       - /mnt/cache/podcast-scratch:/scratch
-      - /mnt/user/appdata/podcast/chatterbox-models:/root/.cache/huggingface
+      # 9.3 GB of weights, fetched by scripts/fetch_musetalk_weights.py. Per
+      # node -- they are not on the share, deliberately, so a render never waits
+      # on NFS to page in a model.
+      - /mnt/user/appdata/podcast/musetalk-models:/opt/MuseTalk/models
     healthcheck:
-      test: ["CMD", "python", "-c",
-             "import urllib.request,json,sys; sys.exit(0 if json.load(urllib.request.urlopen('http://localhost:8080/health'))['model_loaded'] else 1)"]
+      test: ["CMD", "python3.11", "-c",
+             "import urllib.request,json,sys; sys.exit(0 if json.load(urllib.request.urlopen('http://localhost:8081/health'))['model_loaded'] else 1)"]
       interval: 30s
       timeout: 10s
-      start_period: 240s
+      # MuseTalk takes 60-90s to load. A shorter window would restart-loop the
+      # container before it ever finishes starting.
+      start_period: 300s
       retries: 3
-    logging:
-      driver: json-file
-      options: { max-size: "10m", max-file: "3" }
+
+  media-worker:
+    <<: *common
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.media
+    container_name: podcast-media
+    ports: ["8082:8082"]
+    mem_limit: 8g
+    environment:
+      # The A1000. Deliberately a different card from the avatar worker, so
+      # captions and encoding never queue behind a render.
+      NVIDIA_VISIBLE_DEVICES: "${NODE_B_A1000}"
+      NVIDIA_DRIVER_CAPABILITIES: "compute,utility,video"
+      REQUIRED_VRAM_MB: "2500"
+      WHISPER_MODEL: "large-v3"
+      WHISPER_COMPUTE: "int8_float16"
+      PORT: "8082"
+    volumes:
+      - /mnt/remotes/podcast:/pipeline
+      - /mnt/cache/podcast-scratch-media:/scratch
+      # ~3 GB of Whisper weights, downloaded on first start. node-c holds its
+      # own copy; that is the cost of two media workers and it is worth it.
+      - /mnt/user/appdata/podcast/whisper-models:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "python3.11", "-c",
+             "import urllib.request,json,sys; sys.exit(0 if json.load(urllib.request.urlopen('http://localhost:8082/health'))['model_loaded'] else 1)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 180s
+      retries: 3

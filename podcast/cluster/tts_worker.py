@@ -1,5 +1,10 @@
 #!/usr/bin/env python
-"""Voice worker — Chatterbox, warm. Runs on node-b (10.10.5.16), RTX 3090.
+"""Voice worker — Chatterbox, warm. Runs on node-a (10.10.5.15), RTX 3090.
+
+Shares that card with Ollama, which is why REQUIRED_VRAM_MB matters here more
+than anywhere else in the cluster: a 27B model resident at 17 GB leaves under
+the 6 GB this needs, and the worker refuses to start rather than dying partway
+through an episode.
 
 Loads the model once at container start and holds it. A job synthesizes one text
 chunk and writes a WAV to the shared export; the response carries the duration so

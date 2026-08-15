@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Avatar worker — MuseTalk, warm. Runs on node-a (10.10.5.15), RTX 3090.
+"""Avatar worker — MuseTalk, warm. Runs on node-b and node-c, one RTX 3090 each.
 
 This is the slowest stage and the one that decides how long an episode takes, so
 it is also where the 1 GbE budget matters most.

@@ -1,6 +1,14 @@
 # Hardware plan
 
-Target machine: 2× RTX 3090 (24 GB each) + 1× RTX A1000 (8 GB), Ubuntu 24.04 LTS.
+> **This describes the original single-machine design, which is not what was
+> built.** The pipeline runs on three Unraid servers — 3× RTX 3090 and 2× RTX
+> A1000 across node-a/b/c — and `docs/CLUSTER.md` is the accurate document for
+> the deployed system. What is kept here is the reasoning that still applies
+> whichever way the cards are arranged: what each class of card is good for,
+> power and thermals for multi-3090 boxes, and storage sizing.
+
+Original target machine: 2× RTX 3090 (24 GB each) + 1× RTX A1000 (8 GB),
+Ubuntu 24.04 LTS.
 
 ## What each card does
 

@@ -1,14 +1,21 @@
 #!/usr/bin/env python
-"""Media worker — captions and video encoding. Runs on node-a's RTX A1000.
+"""Media worker — captions and video encoding. One per A1000: node-b and node-c.
 
 Two jobs share this container because they share a card and never overlap in the
 pipeline: captions run once the voice track is complete, encoding runs once the
 avatar is. Whisper stays resident between episodes; ffmpeg is invoked per job.
 
 The A1000 is a 50 W, 8 GB card — not a compute card. It earns its place by
-keeping the desktop and all video encoding off the 3090s, so those stay clean
-compute. Whisper large-v3 in int8 fits comfortably and transcribes a full episode
-in a couple of minutes.
+keeping all video encoding off the 3090s, so those stay clean compute. Whisper
+large-v3 in int8 fits comfortably and transcribes a full episode in a couple of
+minutes.
+
+Both cards sat, or would have sat, in node-a before 2026-08-15, where the only
+free slot was x1 off the chipset behind a USB riser — Gen1 x1, roughly 250 MB/s.
+Whisper tolerated that (load once, small audio in, text out); NVENC would not
+have, because encode actually moves frames across the bus. They live on the two
+Threadripper boards now with real lanes, which is what makes it reasonable to
+run both tasks on this worker rather than just captions.
 
     POST /run  {"task": "captions", "audio": "...", "out_dir": "...", "prompt": "..."}
     POST /run  {"task": "encode", "args": ["-i", ...], "out_path": "..."}

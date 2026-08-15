@@ -1,26 +1,47 @@
 # Multi-node deployment
 
-Two Unraid servers now, a third later. Every model loads once when its container
+Three Unraid servers, five GPU workers. Every model loads once when its container
 starts and stays in VRAM forever — no reload per episode, no config swapping
 between stages.
 
 ```
-┌──── node-a ── 10.10.5.15 ──────────────────────────┐
+┌──── node-a ── 10.10.5.15 ── 3090 ──────────────────┐
 │  /mnt/user/podcast   ← shared export, NFS           │
 │  /mnt/cache/podcast-scratch  ← local NVMe           │
 │                                                     │
 │  orchestrator   CPU     review UI  :8420            │
-│  avatar-worker  3090    MuseTalk   :8081  ← slowest │
-│  media-worker   A1000   Whisper + NVENC :8082       │
-└─────────────────────────────────────────────────────┘
-                       │ 1 GbE
-┌──── node-b ── 10.10.5.16 ──────────────────────────┐
-│  mounts node-a's export at /pipeline (NFS)          │
 │  tts-worker     3090    Chatterbox :8080            │
 └─────────────────────────────────────────────────────┘
-
-later:  node-c ── 10.10.5.17 ── avatar-worker #2 :8081
+                       │ 1 GbE
+      ┌────────────────┴────────────────┐
+┌──── node-b ── .16 ────────┐  ┌──── node-c ── .17 ────────┐
+│  3090 + A1000             │  │  3090 + A1000             │
+│  mounts the export (NFS)  │  │  mounts the export (NFS)  │
+│                           │  │                           │
+│  avatar-worker  3090 :8081│  │  avatar-worker  3090 :8081│
+│  media-worker  A1000 :8082│  │  media-worker  A1000 :8082│
+└───────────────────────────┘  └───────────────────────────┘
 ```
+
+Node-b and node-c are identical in shape; only their GPU UUIDs differ. Node-a is
+deliberately the odd one out — it is a 4-core i7-7700 on a BIOSTAR TB250-BTC+
+mining board, the weakest machine here, so it holds the storage, the CPU-only
+orchestrator, and exactly one GPU job.
+
+### Card history
+
+The A1000s both used to be node-a's problem. That board has one full-width slot;
+anything else lands in an x1 chipset slot, and the card that was there ran behind
+a USB riser at Gen1 x1 — about 250 MB/s, a thirty-second of what the card can do.
+Whisper tolerated it (load once, small audio in, text out). NVENC would not have.
+
+As of 2026-08-15 one A1000 moved to node-b, a second was installed in node-c, and
+node-a is single-card. Both A1000s now have real PCIe lanes on Threadripper
+boards, which is why the media worker runs captions *and* encode rather than
+captions alone.
+
+**A card's UUID follows the card, not the slot.** When you move one between
+hosts, move its value in `.env` to the new variable name unchanged.
 
 ## The two ideas that make it work
 
@@ -46,17 +67,31 @@ a window is full, dispatches it to an avatar worker immediately, and keeps
 synthesizing. Avatar rendering starts about 90 seconds into the episode instead
 of waiting 6–8 minutes for the whole voice track.
 
-| | Single box | Two nodes | Three nodes |
-|---|---|---|---|
-| Model loads per episode | 3 | **0** | **0** |
-| Voice | 4–8 min | 4–8 min (overlapped) | overlapped |
-| Avatar | 30–45 min | 30–45 min | **15–23 min** |
-| Captions + encode | 7–13 min | 7–13 min | 7–13 min |
-| **Total after approval** | **45–70 min** | **38–55 min** | **23–37 min** |
+| | Single box | Three nodes, as built |
+|---|---|---|
+| Model loads per episode | 3 | **0** |
+| Voice | 4–8 min | ~13 min, overlapped (measured) |
+| Avatar | 30–45 min | **15–23 min** (estimated) |
+| Captions + encode | 7–13 min | 7–13 min |
+| **Total after approval** | **45–70 min** | **23–37 min** |
 
-The third server should be a **second avatar worker**, not anything else. Avatar
-is 30–45 minutes against 4–8 for voice; it is the only stage where another card
-meaningfully shortens the episode. Two avatar workers roughly halve it.
+Only the voice number is measured: **1.42× realtime**, from a 32-chunk run that
+took 173 s of GPU time for 4.1 minutes of audio — better than the 1.19× a single
+8-second probe suggested, because model warm-up amortizes across the batch. An
+18-minute show is therefore about 13 minutes on node-a's one card. Everything in
+the avatar column is still an estimate; no full render has been timed.
+
+### Where the next card goes
+
+A **3090 for a second TTS worker**, in node-b or node-c. Not a third avatar, and
+not another A1000.
+
+Voice at ~13 minutes and avatar at ~20 across two workers are close enough that
+a third avatar worker would drop avatar to ~13 and make voice the new bottleneck
+— the card would buy nothing. A second TTS card takes voice to ~6 minutes and
+leaves avatar as the honest limit. An A1000 cannot take this job: 8 GB is tight
+against Chatterbox's 6 GB floor, and it runs 4–6× slower than a 3090 even when
+it fits.
 
 ---
 
@@ -75,20 +110,28 @@ Then create the directory layout and the local scratch pool:
 
 ```bash
 mkdir -p /mnt/user/podcast/{work,output,assets/{voice,avatar,brand,broll},config}
-mkdir -p /mnt/cache/podcast-scratch /mnt/cache/podcast-scratch-media
+mkdir -p /mnt/cache/podcast-scratch
 cp /path/to/repo/podcast/config/*.yaml /mnt/user/podcast/config/
 ```
 
 Scratch must be on a **cache/NVMe pool, not the array**. It holds the driving
 video, which is written and read constantly during a render.
 
-### 2 — Mount the share on node-b
+### 2 — Mount the share on node-b and node-c
+
+Same commands on both:
 
 ```bash
 mkdir -p /mnt/remotes/podcast
-mount -t nfs -o rw,hard,intr,rsize=131072,wsize=131072 \
+mount -t nfs -o rw,soft,timeo=100,retrans=3,rsize=131072,wsize=131072 \
       10.10.5.15:/mnt/user/podcast /mnt/remotes/podcast
+mkdir -p /mnt/cache/podcast-scratch /mnt/cache/podcast-scratch-media
 ```
+
+`soft` rather than `hard`: with a hard mount, node-a going away leaves every
+worker process blocked in uninterruptible I/O and the containers cannot even be
+killed. A soft mount fails the job with an error instead, which the scheduler
+already knows how to retry on another node.
 
 Verify both directions before going further — this is the single most common
 failure and it surfaces as confusing errors much later:
@@ -102,34 +145,50 @@ Make it survive reboot by adding the mount to `/boot/config/go`, or use the
 
 ### 3 — GPU drivers and UUIDs
 
-Install the **Nvidia Driver** plugin from Community Applications on **both**
-servers, then reboot. Get the UUIDs:
+Install the **Nvidia Driver** plugin from Community Applications on **all three**
+servers, then reboot. On each host:
 
 ```bash
 nvidia-smi --query-gpu=index,name,uuid,memory.total --format=csv
 ```
 
 **Use UUIDs, never indices.** Indices reorder across reboots and after any
-hardware change. On node-a that eventually puts the avatar render on the A1000,
-where it will run out of memory or crawl. Paste the UUIDs into the
-`NVIDIA_VISIBLE_DEVICES` values in both compose files.
+hardware change; on node-b and node-c that eventually points the avatar render at
+the A1000, where it runs out of memory or crawls. A UUID is burned into the card
+and follows it between machines, so moving a card means moving its value to the
+new variable name — not looking it up again expecting a new number.
+
+Copy `.env.example` to `.env` **on each node**, in the same directory you run
+`docker compose` from, and fill in the UUIDs that node needs. Confirm the
+substitution actually happened before starting anything:
+
+```bash
+docker compose -f docker-compose.node-b.yml config | grep NVIDIA_VISIBLE
+```
+
+An unset variable expands to an empty string, which hands the container *every*
+GPU on the box rather than failing.
 
 ### 4 — Check for VRAM already in use
 
-You mentioned other AI/LLM containers on these boxes. Before deploying:
+Other AI/LLM containers run on these boxes. Before deploying, on each host:
 
 ```bash
 nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv
 ```
 
-The pipeline needs roughly **8 GB free on the avatar 3090**, **6 GB on the voice
-3090**, and **2.5 GB on the A1000**. If Ollama or similar is holding a 3090, you
-have three options, in order of preference:
+The pipeline needs roughly **6 GB free on node-a's 3090** (voice), **8 GB on each
+avatar 3090**, and **2.5 GB on each A1000**.
 
-1. Pin that container to the *other* 3090 and give this pipeline a clean card.
-2. Set `OLLAMA_KEEP_ALIVE=0` so it releases VRAM when idle.
-3. Put the avatar worker on node-b and the voice worker on node-a — swap the two
-   `role` values in `cluster.yaml`; nothing else changes.
+Node-a is the one that bites: Ollama shares that card and holds ~17 GB with a 27B
+model resident, leaving under the 6 GB the voice worker needs. Two fixes, in
+order of preference:
+
+1. Set `OLLAMA_KEEP_ALIVE=30m` (it defaults to 24h here) and
+   `OLLAMA_MAX_LOADED_MODELS=1`, so the card frees up between uses.
+2. Move voice to node-b or node-c's 3090 — swap the `role` values in
+   `cluster.yaml` and the service in the compose files. This costs you avatar
+   capacity, so it is a last resort.
 
 Workers check free VRAM at startup and refuse to load with a specific message
 rather than failing mid-render. Tune the threshold per worker with
@@ -143,11 +202,27 @@ cd /mnt/user/podcast/repo/podcast/docker
 docker compose -f docker-compose.node-a.yml up -d --build
 
 # node-b
+cd /mnt/remotes/podcast/repo/podcast/docker
 docker compose -f docker-compose.node-b.yml up -d --build
+
+# node-c
+cd /mnt/remotes/podcast/repo/podcast/docker
+docker compose -f docker-compose.node-c.yml up -d --build
 ```
 
 First build pulls CUDA base images and PyTorch — expect 20–40 minutes and ~25 GB
 per node. Model weights mount from `appdata`, so they survive rebuilds.
+
+Each avatar node then needs its MuseTalk weights, 9.3 GB, once:
+
+```bash
+docker exec podcast-avatar python3.11 /pipeline/repo/podcast/scripts/fetch_musetalk_weights.py
+docker restart podcast-avatar
+```
+
+Do not use MuseTalk's own `download_weights.sh`. It prints "All weights have been
+downloaded successfully!" unconditionally, including when nothing transferred —
+which is how two avatar nodes reported healthy for days while holding zero bytes.
 
 ### 6 — Verify
 
@@ -157,9 +232,11 @@ podcastpipe cluster
 
 ```
 NODE         ROLE     STATE    GPU                       VRAM FREE
-tts-b        tts      up       NVIDIA GeForce RTX 3090     18432 MB
-avatar-a     avatar   up       NVIDIA GeForce RTX 3090     14208 MB
-media-a      media    up       NVIDIA RTX A1000             5376 MB
+tts-a        tts      up       NVIDIA GeForce RTX 3090      6912 MB
+avatar-b     avatar   up       NVIDIA GeForce RTX 3090     14208 MB
+media-b      media    up       NVIDIA RTX A1000             5376 MB
+avatar-c     avatar   up       NVIDIA GeForce RTX 3090     14208 MB
+media-c      media    up       NVIDIA RTX A1000             5376 MB
 ```
 
 `DOWN` with a reason is diagnostic, not a failure to guess at:
@@ -193,22 +270,33 @@ podcastpipe finish
 
 ---
 
-## Adding the third server
+## Adding a node, or a card
 
-1. Install Unraid, the Nvidia plugin, and mount node-a's export at
-   `/mnt/remotes/podcast`.
-2. Copy `docker-compose.node-b.yml`, swap the service for `avatar-worker`, point
-   it at `Dockerfile.avatar`, and set that card's UUID.
-3. Uncomment the `avatar-c` block in `config/cluster.yaml`.
-4. `podcastpipe cluster` — it should show two avatar nodes and capacity 2.
+The pattern is the same either way: the scheduler dispatches to whichever node of
+the right role is free, so capacity is a config fact, not a code change.
 
-Nothing else changes. The scheduler distributes windows to whichever avatar node
-is free, so the episode gets shorter with no code or config change beyond that
-one block.
+**A whole new server:**
 
-With three nodes, consider dropping `window_seconds` to 90 in `cluster.yaml`:
+1. Install Unraid, the Nvidia driver plugin, and mount node-a's export at
+   `/mnt/remotes/podcast` (step 2 above).
+2. Copy `docker-compose.node-c.yml` to `docker-compose.node-d.yml` and change the
+   `${NODE_C_*}` variable names. Node-b and node-c are already identical apart
+   from their UUIDs, which is the point.
+3. Add the node's block to `nodes:` in `config/cluster.yaml`.
+4. `podcastpipe cluster` — the new worker should appear `up`.
+
+**A second card in an existing node:** add a service to that node's compose file
+with its own port and UUID, and a matching block in `cluster.yaml`. Ports are the
+convention that keeps this readable — `:8080` voice, `:8081` avatar, `:8082`
+media — so a third role on one box gets the port its role already owns.
+
+**Moving a card between machines:** move its UUID value in `.env` to the new
+node's variable name, unchanged. UUIDs belong to cards, not slots.
+
+At three or more avatar workers, drop `window_seconds` to 90 in `cluster.yaml`:
 smaller windows spread more evenly across more workers, at the cost of slightly
-more per-render warm-up.
+more per-render warm-up. Check the bottleneck first — with voice on one card at
+1.42× realtime, more avatar capacity stops helping at two workers.
 
 ## Operations
 
@@ -226,7 +314,8 @@ rather than hanging.
 ```bash
 docker logs -f podcast-avatar
 watch -n2 nvidia-smi
-curl -s http://10.10.5.15:8081/health | python3 -m json.tool
+curl -s http://10.10.5.16:8081/health | python3 -m json.tool   # avatar-b
+curl -s http://10.10.5.15:8080/health | python3 -m json.tool   # tts-a
 ```
 
 `/health` reports jobs completed, mean job seconds and free VRAM — the fastest
