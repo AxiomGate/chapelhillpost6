@@ -176,6 +176,14 @@ def cmd_avatar(args: argparse.Namespace) -> int:
     from .stages import avatar as avatar_stage
 
     config, database, episode_id = _context(args)
+
+    # renderer: none is the audio-first configuration, not an error. Skip here
+    # rather than raising, so `finish` runs straight through to captions and
+    # publish on an episode that was never meant to have video.
+    if config.avatar.renderer == "none":
+        print("Avatar renderer is 'none' — audio-only episode, skipping.")
+        return 0
+
     episode_dir = _episode_dir(config, episode_id)
     episode = database.get_episode(episode_id)
     audio = (episode.artifacts.get("voice_raw") if episode else None) or str(
@@ -242,6 +250,13 @@ def cmd_captions(args: argparse.Namespace) -> int:
 
 def cmd_assemble(args: argparse.Namespace) -> int:
     config, database, episode_id = _context(args)
+
+    # Nothing to composite without an avatar render. The audio masters are
+    # already the deliverable for an audio-first episode.
+    if config.avatar.renderer == "none":
+        print("Avatar renderer is 'none' — no video to assemble, skipping.")
+        return 0
+
     episode_dir = _episode_dir(config, episode_id)
     episode = database.get_episode(episode_id)
     if episode is None:
