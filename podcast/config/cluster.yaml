@@ -19,39 +19,58 @@ storage:
   scratch: "/scratch"
 
 nodes:
-  tts-b:
-    url: "http://10.10.5.16:8080"
+  # Voice lives on node-a's 3090, which it shares with Ollama. That card is the
+  # only full-width slot on node-a's board (a BIOSTAR TB250-BTC+ mining board
+  # with a 4-core i7-7700), so it is the only place a large model belongs there.
+  # Ollama holds ~17 GB with a 27B model resident; OLLAMA_KEEP_ALIVE must stay
+  # short or this worker cannot get its 6 GB and refuses to start.
+  tts-a:
+    url: "http://10.10.5.15:8080"
     role: tts
-    gpu: "RTX 3090 (node-b)"
+    gpu: "RTX 3090 (node-a, shared with Ollama)"
     max_concurrent: 1
 
-  avatar-a:
-    url: "http://10.10.5.15:8081"
-    role: avatar
-    gpu: "RTX 3090 (node-a)"
-    max_concurrent: 1
-
+  # Captions and NVENC on node-a's A1000. That card sits in an x1 chipset slot
+  # behind a USB riser and trains at Gen1 x1 -- about 250 MB/s, 1/32nd of what
+  # the card can do. Fine for Whisper, which loads once and then handles small
+  # audio in and text out. Do NOT put rendering here.
   media-a:
     url: "http://10.10.5.15:8082"
     role: media
-    gpu: "RTX A1000 (node-a)"
+    gpu: "RTX A1000 (node-a, Gen1 x1 via riser)"
     max_concurrent: 1
 
-  # Third server, when it arrives. Add it as a SECOND AVATAR worker rather than
-  # anything else: the avatar render is 30-45 minutes against 4-8 for voice, so
-  # it is the only stage where another card meaningfully shortens the episode.
-  # Two avatar workers roughly halve the longest stage.
-  # avatar-c:
-  #   url: "http://10.10.5.17:8081"
-  #   role: avatar
-  #   gpu: "RTX 3090 (node-c)"
+  # Avatar is the longest stage, so it gets the dedicated cards. Both of these
+  # are full Gen3 x16 on Threadripper boards, unlike anything in node-a.
+  avatar-b:
+    url: "http://10.10.5.16:8081"
+    role: avatar
+    gpu: "RTX 3090 (node-b, dedicated)"
+    max_concurrent: 1
+
+  avatar-c:
+    url: "http://10.10.5.17:8081"
+    role: avatar
+    gpu: "RTX 3090 (node-c, dedicated)"
+    max_concurrent: 1
+
+  # The NEXT card should be a second TTS worker, not a third avatar. Voice
+  # measures 1.19x realtime (~17 min for a 20-minute episode); two avatar
+  # workers put that stage at ~20 min. Adding a third avatar worker drops avatar
+  # to ~13 min and makes VOICE the bottleneck, so the marginal card buys nothing
+  # unless it goes to synthesis.
+  # tts-c:
+  #   url: "http://10.10.5.17:8080"
+  #   role: tts
+  #   gpu: "RTX 3090 (node-c, second card)"
   #   max_concurrent: 1
 
 scheduling:
   # Seconds of audio per avatar render window. Larger amortizes per-render
   # warm-up; smaller starts the avatar sooner and spreads work across more
-  # workers. 120 is a good balance for one or two avatar nodes; drop toward 90
-  # once you have three.
+  # workers. 120 suits two avatar nodes -- a 20-minute episode becomes 10
+  # windows, five per worker, which is enough granularity to keep both busy
+  # without paying warm-up too often. Drop toward 90 at three avatar workers.
   window_seconds: 120
 
   # How long to wait for a busy node before giving up.

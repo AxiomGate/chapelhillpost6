@@ -1,0 +1,61 @@
+# node-c — 10.10.5.17 — AxiomGateThreadRipper2 — RTX 3090 — Unraid
+#
+# Second avatar worker. Avatar is the longest stage of an episode, and it is the
+# only stage where another card meaningfully shortens the wall clock: voice
+# measures 1.19x realtime (~17 min for a 20-minute episode), so with two avatar
+# workers at ~20 min the two stages run roughly in step. A third avatar worker
+# would make voice the bottleneck -- put the next card on TTS instead.
+#
+# Threadripper 1900X, 8c/16t, and the 3090 sits at Gen3 x16. Both better than
+# node-a, which is a 4-core mining board with its second card on a USB riser.
+#
+# The share lives on node-a and is mounted here over NFS at /mnt/remotes/podcast.
+# Inside the container it appears at /pipeline, the same path every other node
+# uses -- that is what makes job payloads portable across nodes.
+#
+# Run from this directory:
+#   cd /mnt/remotes/podcast/repo/docker
+#   docker compose -f docker-compose.node-c.yml up -d --build
+
+services:
+
+  avatar-worker:
+    restart: unless-stopped
+    runtime: nvidia
+    # Reap zombies. The worker shells out to MuseTalk's inference script per
+    # job; without an init process those children accumulate as defunct entries.
+    init: true
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.avatar
+    container_name: podcast-avatar
+    ports: ["8081:8081"]
+    # A ceiling so a runaway render degrades this container instead of the host.
+    # 31 GB box; MuseTalk plus torch sits well under this in normal operation.
+    mem_limit: 16g
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "${NODE_C_3090}"
+      NVIDIA_DRIVER_CAPABILITIES: "compute,utility,video"
+      REQUIRED_VRAM_MB: "8000"
+      LOCAL_CACHE: "/scratch"
+      MUSETALK_HOME: "/opt/MuseTalk"
+      PORT: "8081"
+    volumes:
+      # node-a's share over NFS. Same in-container path as every other node.
+      - /mnt/remotes/podcast:/pipeline
+      # Node-local NVMe. Driving video lives here so it never crosses the
+      # network. Must be a cache pool, not the parity array.
+      - /mnt/cache/podcast-scratch:/scratch
+      - /mnt/user/appdata/podcast/musetalk-models:/opt/MuseTalk/models
+    healthcheck:
+      test: ["CMD", "python3.11", "-c",
+             "import urllib.request,json,sys; sys.exit(0 if json.load(urllib.request.urlopen('http://localhost:8081/health'))['model_loaded'] else 1)"]
+      interval: 30s
+      timeout: 10s
+      # MuseTalk takes 60-90s to load. A shorter window would restart-loop the
+      # container before it ever finishes starting.
+      start_period: 300s
+      retries: 3
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
