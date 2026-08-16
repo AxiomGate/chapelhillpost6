@@ -117,6 +117,12 @@ def chunk_key(config: Config, audio_path: Path, start: float, length: float) -> 
                 "base_loop": config.avatar.base_loop,
                 "fps": config.avatar.fps,
                 "bbox_shift": config.avatar.bbox_shift,
+                # Blend settings belong in the key: nudging cheek width should
+                # re-render, not silently return the previously blended frames.
+                "parsing_mode": config.avatar.parsing_mode,
+                "left_cheek_width": config.avatar.left_cheek_width,
+                "right_cheek_width": config.avatar.right_cheek_width,
+                "extra_margin": config.avatar.extra_margin,
                 "start": start,
                 "length": length,
             },
@@ -154,6 +160,10 @@ def _render_via_cluster(cluster, config: Config, base_loop: Path, todo: list[dic
                 "base_loop": str(base_loop),
                 "fps": config.avatar.fps,
                 "bbox_shift": config.avatar.bbox_shift,
+                "parsing_mode": config.avatar.parsing_mode,
+                "left_cheek_width": config.avatar.left_cheek_width,
+                "right_cheek_width": config.avatar.right_cheek_width,
+                "extra_margin": config.avatar.extra_margin,
                 # Each window starts at a different point in the loop, so head
                 # motion does not restart in lockstep every chunk and give the
                 # whole episode a visible two-minute cycle.

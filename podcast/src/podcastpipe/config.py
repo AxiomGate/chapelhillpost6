@@ -90,7 +90,15 @@ class AvatarConfig:
     base_loop: str = "assets/avatar/base_loop.mp4"
     fps: int = 25
     bbox_shift: int = 0
-    chunk_seconds: int = 120
+    chunk_seconds: int = 60
+    # How much of the face MuseTalk repaints and blends back. These are the
+    # knobs for the one artifact this technique reliably produces: a visible
+    # boundary where regenerated mouth meets real face. Narrower is subtler but
+    # risks a hard edge at wide mouth shapes.
+    parsing_mode: str = "jaw"  # jaw | raw
+    left_cheek_width: int = 90
+    right_cheek_width: int = 90
+    extra_margin: int = 10
 
 
 @dataclass

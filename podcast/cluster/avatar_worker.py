@@ -280,6 +280,12 @@ def handle(model, job: dict) -> dict:
              # Also in task.yaml. Which of the two this MuseTalk reads has moved
              # between versions, and passing both costs nothing.
              "--bbox_shift", str(bbox_shift),
+             # How much face gets repainted and how it blends back. The
+             # defaults leave a wider blended region than most footage needs.
+             "--parsing_mode", str(job.get("parsing_mode", "jaw")),
+             "--left_cheek_width", str(int(job.get("left_cheek_width", 90))),
+             "--right_cheek_width", str(int(job.get("right_cheek_width", 90))),
+             "--extra_margin", str(int(job.get("extra_margin", 10))),
              "--use_float16"],
             cwd=MUSETALK_HOME,
         )

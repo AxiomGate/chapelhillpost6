@@ -105,6 +105,16 @@ avatar:
   # 31 GB total and also runs a media worker.
   chunk_seconds: 60
 
+  # The blended region where regenerated mouth meets real face. This is the one
+  # artifact the technique reliably produces, and these are its controls.
+  # Narrower is subtler; too narrow leaves a hard edge on wide mouth shapes.
+  # Tune with a 15-second probe rather than a full episode -- it is three
+  # minutes a try, and the chunk cache keys on all four of these.
+  parsing_mode: "jaw"          # jaw | raw — jaw follows the jawline, raw is a box
+  left_cheek_width: 90         # lower to shrink the blend inward
+  right_cheek_width: 90
+  extra_margin: 10             # padding around the detected face crop
+
 video:
   width: 1920
   height: 1080
