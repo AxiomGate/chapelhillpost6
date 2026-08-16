@@ -12,6 +12,7 @@ opaque error forty minutes into a render otherwise.
 from __future__ import annotations
 
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -377,7 +378,14 @@ def concat_with_bumpers(
     """
     parts = [p for p in (intro, main, outro) if p and Path(p).exists()]
     if len(parts) == 1:
-        return main
+        # No bumpers on this client. Still produce `output`, rather than handing
+        # back the intermediate under its own name: the finished episode should
+        # be at the same path whether or not a client has an intro, so nothing
+        # downstream has to ask which file the deliverable ended up in.
+        main, output = Path(main), Path(output)
+        if main != output:
+            shutil.move(str(main), str(output))
+        return output
 
     command: list[str] = ["ffmpeg", "-y"]
     for part in parts:
@@ -457,15 +465,19 @@ def assemble(
 
     intro = config.path(config.video.intro) if config.video.intro else None
     outro = config.path(config.video.outro) if config.video.outro else None
-    final = video_dir / "episode.mp4"
-    concat_with_bumpers(
+    final = concat_with_bumpers(
         body,
-        final,
+        video_dir / "episode.mp4",
         config,
         intro if intro and intro.exists() else None,
         outro if outro and outro.exists() else None,
         cluster=cluster,
     )
-    if final != body and not final.exists():
-        raise RuntimeError("assembly produced no output")
-    return str(final if final.exists() else body)
+    # Trust the returned path rather than re-deriving it. Checking for a
+    # hardcoded episode.mp4 is what made a successful encode report "assembly
+    # produced no output" on a client with no bumpers.
+    if not Path(final).exists():
+        raise RuntimeError(
+            f"assembly produced no output at {final}. See logs/assemble.log."
+        )
+    return str(final)

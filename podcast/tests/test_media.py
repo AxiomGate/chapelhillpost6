@@ -274,3 +274,55 @@ class TestYoutubeDescription:
 
     def test_no_sources_block_when_empty(self):
         assert "Sources:" not in build_youtube_description("Body.", [], "https://site")
+
+
+class TestBumperJoin:
+    """A client with no intro/outro still has to end up with a finished episode
+    at the expected path. Returning the intermediate under its own name made a
+    successful encode report "assembly produced no output".
+    """
+
+    def _config(self, tmp_path):
+        from podcastpipe.config import load_config
+
+        (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "config" / "show.yaml").write_text(
+            "show:\n  name: Bumper Test\n", encoding="utf-8"
+        )
+        return load_config(tmp_path / "config" / "show.yaml")
+
+    def test_no_bumpers_still_produces_the_output_path(self, tmp_path, monkeypatch):
+        from podcastpipe.stages.assemble import concat_with_bumpers
+
+        monkeypatch.delenv("PODCASTPIPE_CLIENT", raising=False)
+        monkeypatch.delenv("PODCASTPIPE_CONFIG", raising=False)
+        config = self._config(tmp_path)
+
+        body = tmp_path / "body.mp4"
+        body.write_bytes(b"rendered episode")
+        final = tmp_path / "episode.mp4"
+
+        result = concat_with_bumpers(body, final, config, None, None)
+
+        assert Path(result) == final
+        assert final.exists(), "the deliverable must exist at the requested path"
+        assert final.read_bytes() == b"rendered episode"
+        assert not body.exists(), "the intermediate should not be left behind"
+
+    def test_missing_bumper_files_are_ignored(self, tmp_path, monkeypatch):
+        from podcastpipe.stages.assemble import concat_with_bumpers
+
+        monkeypatch.delenv("PODCASTPIPE_CLIENT", raising=False)
+        monkeypatch.delenv("PODCASTPIPE_CONFIG", raising=False)
+        config = self._config(tmp_path)
+
+        body = tmp_path / "body.mp4"
+        body.write_bytes(b"x")
+        final = tmp_path / "episode.mp4"
+
+        # Paths that do not exist must not trigger a concat -- ffmpeg is never
+        # invoked here, so a wrong branch would fail the test outright.
+        result = concat_with_bumpers(
+            body, final, config, tmp_path / "nope_intro.mp4", tmp_path / "nope_outro.mp4"
+        )
+        assert Path(result) == final and final.exists()
