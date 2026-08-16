@@ -67,11 +67,26 @@ VAE_TYPE = os.environ.get("MUSETALK_VAE_TYPE", "sd-vae")
 def _run(command: list[str], cwd: Path | None = None) -> None:
     completed = subprocess.run(command, cwd=str(cwd) if cwd else None,
                                capture_output=True, text=True)
-    if completed.returncode != 0:
+    if completed.returncode == 0:
+        return
+
+    # A killed process leaves no traceback -- it just stops, usually most of the
+    # way through a render, and the only evidence is the exit code. Saying what
+    # -9 means here is the difference between a two-minute fix and an afternoon.
+    if completed.returncode == -9:
         raise RuntimeError(
-            f"command failed ({completed.returncode}): {' '.join(command[:6])}...\n"
+            "MuseTalk was killed (SIGKILL), which is almost always this "
+            "container's memory limit rather than anything wrong with the job. "
+            "MuseTalk holds decoded frames in RAM -- about 6.2 MB each at 1080p, "
+            "so a 120-second window at 25 fps needs roughly 18.7 GB. Lower "
+            "avatar.chunk_seconds in show.yaml, or raise mem_limit in this "
+            "node's compose file.\n"
             f"{completed.stderr[-2000:]}"
         )
+    raise RuntimeError(
+        f"command failed ({completed.returncode}): {' '.join(command[:6])}...\n"
+        f"{completed.stderr[-2000:]}"
+    )
 
 
 def _probe_duration(path: Path) -> float:

@@ -93,7 +93,17 @@ avatar:
   base_loop: "assets/avatar/base_loop.mp4"
   fps: 25
   bbox_shift: 0                # nudge the mouth region if lips read too closed
-  chunk_seconds: 120
+  # Bounded by RAM, not by taste. MuseTalk holds decoded frames in memory, and
+  # at 1080p each is 1920*1080*3 = 6.2 MB:
+  #
+  #   120 s -> 3000 frames -> ~18.7 GB   over a 16 GB container, SIGKILL at ~82%
+  #    60 s -> 1500 frames -> ~9.3 GB    fits, with room for the model
+  #
+  # An OOM kill here is silent -- the subprocess dies with no traceback and the
+  # job returns exit -9 after rendering most of the way. Raise this only
+  # alongside mem_limit in the avatar compose files, and remember node-c has
+  # 31 GB total and also runs a media worker.
+  chunk_seconds: 60
 
 video:
   width: 1920
