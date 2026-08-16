@@ -84,46 +84,55 @@ def _probe_duration(path: Path) -> float:
 
 
 def load_model():
-    """Warm MuseTalk. Importing and instantiating here means the 60-90 second
-    load happens once per container lifetime, not once per episode."""
+    """Verify this node can render. Deliberately loads nothing into VRAM.
+
+    Rendering runs in a subprocess -- scripts.inference -- which loads its own
+    copy of every model. The resident copy this used to hold was never read:
+    handle() takes a ``model`` argument and ignores it. It cost about 7 GB of
+    VRAM that the render subprocess then had to fit around, plus 60-90 seconds
+    of startup, for nothing.
+
+    It was also the wrong 7 GB. It called load_all_model() with no arguments, so
+    MuseTalk's relative defaults resolved against this worker's working
+    directory instead of MuseTalk's, and `models/sd-vae` came back as a
+    HuggingFace repo id that does not exist. handle() already gets this right by
+    running the subprocess with cwd=MUSETALK_HOME.
+
+    What /health should mean here is "a render started now would succeed".
+    Checking that every file the subprocess needs is present says exactly that,
+    and says it in milliseconds. It is also the check that was missing when two
+    nodes reported healthy for days holding zero bytes of weights.
+    """
     if not MUSETALK_HOME.exists():
         raise RuntimeError(f"MuseTalk not found at {MUSETALK_HOME}")
 
-    # Check the render-time paths here, not on the first job. Rendering happens
-    # in a subprocess with its own model load, so a missing file there surfaces
-    # forty minutes into an episode as a subprocess exit code -- while /health
-    # has been reporting green the whole time. This is the same failure shape
-    # that left two nodes "healthy" for days holding zero bytes of weights.
-    missing = [
-        str(p) for p in (UNET_CONFIG, UNET_WEIGHTS, WHISPER_DIR) if not p.exists()
-    ]
+    LOCAL_CACHE.mkdir(parents=True, exist_ok=True)
+
+    required = {
+        "unet config": UNET_CONFIG,
+        "unet weights": UNET_WEIGHTS,
+        "whisper": WHISPER_DIR,
+        "vae": _MODELS / VAE_TYPE,
+        "face parsing": _MODELS / "face-parse-bisent" / "79999_iter.pth",
+        "dwpose": _MODELS / "dwpose" / "dw-ll_ucoco_384.pth",
+    }
+    missing = [f"{label} ({path})" for label, path in required.items() if not path.exists()]
     if missing:
         raise RuntimeError(
-            f"MuseTalk {MUSETALK_VERSION} is missing {', '.join(missing)}. "
-            "Run scripts/fetch_musetalk_weights.py inside this container, then "
-            "restart it. Override individual paths with MUSETALK_UNET_CONFIG, "
-            "MUSETALK_UNET_WEIGHTS or MUSETALK_WHISPER_DIR if a MuseTalk update "
-            "moves them."
+            f"MuseTalk {MUSETALK_VERSION} cannot render -- missing "
+            + "; ".join(missing)
+            + ". Run scripts/fetch_musetalk_weights.py inside this container and "
+            "restart it. Individual paths can be overridden with "
+            "MUSETALK_UNET_CONFIG, MUSETALK_UNET_WEIGHTS or MUSETALK_WHISPER_DIR "
+            "if a MuseTalk update moves them."
         )
 
-    LOCAL_CACHE.mkdir(parents=True, exist_ok=True)
-    sys.path.insert(0, str(MUSETALK_HOME))
-
-    import torch
-    from musetalk.utils.utils import load_all_model
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    audio_processor, vae, unet, pe = load_all_model()
-    pe = pe.half().to(device)
-    vae.vae = vae.vae.half().to(device)
-    unet.model = unet.model.half().to(device)
-
     return {
-        "audio_processor": audio_processor,
-        "vae": vae,
-        "unet": unet,
-        "pe": pe,
-        "device": device,
+        "version": MUSETALK_VERSION,
+        "unet_config": str(UNET_CONFIG),
+        "unet_weights": str(UNET_WEIGHTS),
+        "whisper_dir": str(WHISPER_DIR),
+        "vae_type": VAE_TYPE,
     }
 
 
