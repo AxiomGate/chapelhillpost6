@@ -50,6 +50,20 @@ services:
       REQUIRED_VRAM_MB: "8000"
       LOCAL_CACHE: "/scratch"
       MUSETALK_HOME: "/opt/MuseTalk"
+      # Disables the TorchScript compiler, without which `import mmcv.ops`
+      # segfaults this image outright:
+      #
+      #   mmcv.ops.carafe -> mmengine.model -> mmengine zero_optimizer
+      #     -> torch.distributed.optim -> functional_adadelta @torch.jit.script
+      #     -> three levels of recursive compilation -> SIGSEGV
+      #
+      # mmcv 2.1.0 was built against torch ~2.1 and Dockerfile.avatar pins
+      # nothing, so it landed on torch 2.6. Nothing on MuseTalk's inference path
+      # uses TorchScript -- every weight it loads is a plain state dict -- so
+      # turning the compiler off costs nothing and skips the import that dies.
+      #
+      # Remove this once Dockerfile.avatar pins the tested version set.
+      PYTORCH_JIT: "0"
       PORT: "8081"
     volumes:
       - /mnt/remotes/podcast:/pipeline

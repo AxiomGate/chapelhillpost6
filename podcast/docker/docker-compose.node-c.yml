@@ -45,6 +45,11 @@ services:
       REQUIRED_VRAM_MB: "8000"
       LOCAL_CACHE: "/scratch"
       MUSETALK_HOME: "/opt/MuseTalk"
+      # See docker-compose.node-b.yml for the full reasoning: `import mmcv.ops`
+      # segfaults on torch 2.6 while compiling torch.distributed.optim with
+      # TorchScript. MuseTalk's inference path never uses TorchScript, so
+      # disabling the compiler skips the fatal import at no cost.
+      PYTORCH_JIT: "0"
       PORT: "8081"
     volumes:
       # node-a's share over NFS. Same in-container path as every other node.

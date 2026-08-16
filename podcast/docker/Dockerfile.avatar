@@ -1,5 +1,19 @@
 # Avatar worker — MuseTalk. Weights are mounted at runtime rather than baked in,
 # so the image stays small and the models survive a rebuild.
+#
+# KNOWN DEBT: nothing below is pinned, so a build takes whatever is newest that
+# day. The first real render found out why. As built 2026-08-16 this resolves to
+# torch 2.6.0, mmcv 2.1.0, mmdet 3.3.0, mmpose 1.3.2 -- against MuseTalk's tested
+# torch 2.0.1 / mmcv 2.0.1 / mmdet 3.1.0 / mmpose 1.1.0. mmcv 2.1.0's compiled
+# ops predate torch 2.6, and `import mmcv.ops` segfaults while TorchScript
+# compiles torch.distributed.optim.
+#
+# The compose files work around it with PYTORCH_JIT=0, which is sound here --
+# MuseTalk's inference path loads plain state dicts and never uses TorchScript.
+# The real fix is pinning this list to a tested set, which needs a rebuild on
+# every avatar node and a full render to verify, so it is deliberately deferred
+# rather than guessed at. Two unpinned images on two machines will also drift
+# apart from each other over time, which is its own problem.
 FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1
