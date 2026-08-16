@@ -6,8 +6,10 @@ where a bug costs the most: a silently misrouted job wastes 40 minutes of render
 time on the wrong card, and a scheduling bug produces a video with a gap in it.
 """
 
+import json
 import threading
 import time
+from unittest import mock
 
 import pytest
 
@@ -528,3 +530,50 @@ class TestConcurrentDispatch:
         assert client.capacity("avatar") == 2
         assert client.capacity("tts") == 1
         assert client.capacity("media") == 0
+
+
+class TestErrorSurfacing:
+    """A worker answers a failed job with {"error": ...} and a 500. If the
+    client reports only urllib's generic message, every failure looks identical
+    and the cause is stranded in `docker logs` on another machine.
+    """
+
+    def test_worker_error_body_reaches_the_caller(self):
+        import io
+        import urllib.error
+
+        from podcastpipe.cluster import _post_json
+
+        body = json.dumps(
+            {"error": "MuseTalk produced no output for this window", "worker": "avatar-worker"}
+        ).encode()
+
+        def raise_500(*args, **kwargs):
+            raise urllib.error.HTTPError(
+                "http://node/run", 500, "Internal Server Error", {}, io.BytesIO(body)
+            )
+
+        with mock.patch("urllib.request.urlopen", raise_500):
+            with pytest.raises(ClusterError) as caught:
+                _post_json("http://node/run", {}, 5)
+
+        message = str(caught.value)
+        assert "MuseTalk produced no output" in message
+        assert "500" in message
+
+    def test_non_json_error_body_is_still_reported(self):
+        import io
+        import urllib.error
+
+        from podcastpipe.cluster import _post_json
+
+        def raise_502(*args, **kwargs):
+            raise urllib.error.HTTPError(
+                "http://node/run", 502, "Bad Gateway", {}, io.BytesIO(b"<html>nginx</html>")
+            )
+
+        with mock.patch("urllib.request.urlopen", raise_502):
+            with pytest.raises(ClusterError) as caught:
+                _post_json("http://node/run", {}, 5)
+
+        assert "nginx" in str(caught.value)

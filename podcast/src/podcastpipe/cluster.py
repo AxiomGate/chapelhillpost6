@@ -167,8 +167,24 @@ def _post_json(url: str, payload: dict, timeout: int) -> dict:
         headers={"content-type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        body = response.read().decode("utf-8")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        # Workers answer a failed job with {"error": "..."} and a 500. urllib
+        # puts that body on the exception, and str(exc) discards it -- so every
+        # worker-side failure reads "HTTP Error 500: Internal Server Error" and
+        # the actual cause is only visible in `docker logs` on another machine.
+        # Reading it here is the difference between one round trip and three.
+        detail = exc.read().decode("utf-8", "replace").strip()
+        try:
+            parsed = json.loads(detail)
+        except ValueError:
+            pass
+        else:
+            if isinstance(parsed, dict) and parsed.get("error"):
+                detail = str(parsed["error"])
+        raise ClusterError(f"HTTP {exc.code} from {url}: {detail[:800]}") from exc
     return json.loads(body) if body else {}
 
 
