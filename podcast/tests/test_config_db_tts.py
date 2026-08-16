@@ -224,3 +224,56 @@ class TestChunkHash:
         original = chunk_hash("hello", config)
         config.tts.reference_audio = "assets/other.wav"
         assert chunk_hash("hello", config) != original
+
+
+class TestConfigPathResolution:
+    """The orchestrator image ships code only -- config, clients, work and
+    output all live on the share. PODCASTPIPE_CONFIG is how the container is
+    told where that is, and it went unread for long enough to crash-loop a
+    container with eleven identical unhelpful lines.
+    """
+
+    def _write_base(self, root):
+        (root / "config").mkdir(parents=True, exist_ok=True)
+        (root / "config" / "show.yaml").write_text(
+            "show:\n  name: Env Path Show\n", encoding="utf-8"
+        )
+        return root / "config" / "show.yaml"
+
+    def test_env_var_is_honoured(self, tmp_path, monkeypatch):
+        from podcastpipe.config import load_config
+
+        path = self._write_base(tmp_path / "share")
+        monkeypatch.setenv("PODCASTPIPE_CONFIG", str(path))
+        monkeypatch.delenv("PODCASTPIPE_CLIENT", raising=False)
+
+        config = load_config()
+        assert config.show.name == "Env Path Show"
+        # Everything downstream hangs off the config's grandparent, which is
+        # what puts work/ and output/ on the share instead of in the container.
+        assert config.root == (tmp_path / "share").resolve()
+        assert config.work_dir == (tmp_path / "share" / "work").resolve()
+
+    def test_explicit_path_beats_the_env_var(self, tmp_path, monkeypatch):
+        from podcastpipe.config import load_config
+
+        env_path = self._write_base(tmp_path / "fromenv")
+        explicit = self._write_base(tmp_path / "explicit")
+        explicit.write_text("show:\n  name: Explicit\n", encoding="utf-8")
+
+        monkeypatch.setenv("PODCASTPIPE_CONFIG", str(env_path))
+        monkeypatch.delenv("PODCASTPIPE_CLIENT", raising=False)
+
+        assert load_config(explicit).show.name == "Explicit"
+
+    def test_missing_file_names_itself(self, tmp_path, monkeypatch):
+        import pytest as _pytest
+
+        from podcastpipe.config import ConfigError, load_config
+
+        monkeypatch.setenv("PODCASTPIPE_CONFIG", str(tmp_path / "nope" / "show.yaml"))
+        with _pytest.raises(ConfigError) as caught:
+            load_config()
+        message = str(caught.value)
+        assert "PODCASTPIPE_CONFIG" in message
+        assert "/pipeline/config/show.yaml" in message

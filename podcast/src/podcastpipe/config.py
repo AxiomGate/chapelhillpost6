@@ -263,6 +263,15 @@ def _read_yaml(path: Path) -> dict[str, Any]:
 def load_config(path: str | Path | None = None, client: str | None = None) -> Config:
     """Load the base config, then deep-merge the active client's profile.
 
+    The path comes from the ``path`` argument (``--config``), else
+    ``PODCASTPIPE_CONFIG``, else ``config/show.yaml`` beside the package. The
+    environment variable matters in the containers: the orchestrator image holds
+    only the code, and every config, client profile, asset and episode lives on
+    the shared export at ``/pipeline``. Everything else is derived from this
+    path — ``root`` is its grandparent — so pointing it at
+    ``/pipeline/config/show.yaml`` is what puts clients, work and output on the
+    share rather than inside the container.
+
     The client comes from the ``client`` argument, else ``PODCASTPIPE_CLIENT``.
     With neither, the base config is used alone — useful for smoke tests, but it
     carries no branding by design, so real runs should always name a client.
@@ -271,9 +280,20 @@ def load_config(path: str | Path | None = None, client: str | None = None) -> Co
     placeholders the base file references.
     """
     if path is None:
+        path = os.environ.get("PODCASTPIPE_CONFIG", "").strip() or None
+    if path is None:
         root = Path(__file__).resolve().parents[2]
         path = root / "config" / "show.yaml"
     path = Path(path).resolve()
+    if not path.exists():
+        # Worth saying plainly. As a bare FileNotFoundError this is one opaque
+        # line, and in a container with restart: unless-stopped it becomes that
+        # same line repeated forever with nothing pointing at the cause.
+        raise ConfigError(
+            f"no config file at {path}. Pass --config, or set PODCASTPIPE_CONFIG "
+            "to its location. Inside the worker and orchestrator containers the "
+            "share is mounted at /pipeline, so that is /pipeline/config/show.yaml."
+        )
     root = path.parents[1]
 
     data = _read_yaml(path)

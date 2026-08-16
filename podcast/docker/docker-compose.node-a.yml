@@ -80,8 +80,11 @@ services:
       # port at all, and the UI is simply unreachable.
       - "8421:8420"
     environment:
+      # Everything else is derived from this one path: clients/, work/ and
+      # output/ are found beside its parent, and cluster.yaml is read from the
+      # same config directory. The image ships only code -- without this the
+      # orchestrator looks inside the container and finds nothing.
       PODCASTPIPE_CONFIG: "/pipeline/config/show.yaml"
-      PODCASTPIPE_CLUSTER: "/pipeline/config/cluster.yaml"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
       TZ: "America/New_York"
     volumes:
