@@ -89,6 +89,25 @@ def _run(command: list[str], cwd: Path | None = None) -> None:
     )
 
 
+def _probe_frames(path: Path) -> int:
+    """Frame count from the container, or -1 when it does not carry one.
+
+    Returning -1 rather than raising: a missing nb_frames tag is a container
+    quirk, not a bad render, and refusing the job over it would be worse than
+    the problem it guards against.
+    """
+    completed = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=nb_frames",
+         "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+        capture_output=True, text=True,
+    )
+    try:
+        return int(completed.stdout.strip())
+    except ValueError:
+        return -1
+
+
 def _probe_duration(path: Path) -> float:
     completed = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration",
@@ -154,13 +173,29 @@ def load_model():
 def ensure_driving_video(base_loop: Path, fps: int, needed_seconds: float) -> Path:
     """Return a node-local driving video at least ``needed_seconds`` long.
 
-    Built once per (base loop, fps) and reused for every episode thereafter. The
-    ping-pong construction — forward then reversed — removes the visible jump at
-    the loop point, because the last forward frame is the first reverse frame.
+    Built once per (base loop contents, fps) and reused for every episode
+    thereafter. The ping-pong construction — forward then reversed — removes the
+    visible jump at the loop point, because the last forward frame is the first
+    reverse frame.
     """
-    key = hashlib.sha256(f"{base_loop}:{fps}".encode()).hexdigest()[:12]
+    # Key on the file's content, not just its path. Everything here is derived
+    # from the base loop and reused for every later episode, so a key that only
+    # covers the path means replacing assets/avatar/base_loop.mp4 -- the normal
+    # way anyone changes their footage -- silently keeps rendering against the
+    # old clip, on every node, until someone deletes the scratch by hand.
+    # Size and mtime are enough and cost a stat; hashing gigabytes per job is not.
+    stat = base_loop.stat()
+    key = hashlib.sha256(
+        f"{base_loop}:{fps}:{stat.st_size}:{int(stat.st_mtime)}".encode()
+    ).hexdigest()[:12]
     pingpong = LOCAL_CACHE / f"pingpong_{key}.mp4"
     extended = LOCAL_CACHE / f"driving_{key}.mp4"
+
+    # Drop clips built from a previous base loop. Each pair is hundreds of MB
+    # and nothing will ever ask for them again.
+    for stale in LOCAL_CACHE.glob("*_*.mp4"):
+        if stale.name.startswith(("base_", "pingpong_", "driving_")) and key not in stale.name:
+            stale.unlink(missing_ok=True)
 
     if not pingpong.exists():
         local_base = LOCAL_CACHE / f"base_{key}{base_loop.suffix}"
@@ -261,12 +296,29 @@ def handle(model, job: dict) -> dict:
         shutil.copy2(best, staging)
         staging.replace(out_path)
 
+    # MuseTalk can exit 0 having written almost nothing -- one window came back
+    # with 38 frames where 1500 were due, and the worker accepted it because the
+    # file existed. That shipped a frozen minute into a finished episode with no
+    # error anywhere. Count the frames and fail instead, so the scheduler retries
+    # on another node.
+    expected = int(duration * fps)
+    frames = _probe_frames(out_path)
+    if 0 <= frames < expected * 0.9:
+        # Remove it, or the orchestrator's content-hash cache treats this window
+        # as already rendered and the retry never happens.
+        out_path.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"MuseTalk wrote only {frames} frames for a {duration:.1f}s window "
+            f"needing about {expected}, but exited successfully. The output has "
+            "been discarded so this window can be retried."
+        )
+
     return {
         "ok": True,
         "id": job.get("id", ""),
         "out_path": str(out_path),
         "duration": round(duration, 3),
-        "frames": int(duration * fps),
+        "frames": frames if frames >= 0 else expected,
     }
 
 
