@@ -446,3 +446,85 @@ class TestStreamingScheduler:
         assert "voice_chunk" in events
         assert "window_ready" in events
         assert "window_rendered" in events
+
+
+class TestConcurrentDispatch:
+    """The avatar stage submits from several threads so both render nodes stay
+    busy. Selecting a node and claiming its slot has to be one atomic step --
+    otherwise two threads see the same idle node, and half the cluster sits out
+    the longest stage of the episode.
+
+    The timing tests below verify that concurrent dispatch works end to end.
+    They do NOT reliably catch the select-then-claim race: that window is
+    microseconds wide, far narrower than thread-startup jitter, so it survives
+    mutation. ``test_await_node_claims_the_slot_it_returns`` is the one that
+    actually pins the invariant, deterministically and without threads.
+    """
+
+    def test_await_node_claims_the_slot_it_returns(self):
+        client, _ = make_client()
+
+        first = client._await_node("avatar", 0.01, 1.0)
+        assert client.state[first.name].inflight == 1, (
+            "_await_node must claim the slot before returning; a caller that "
+            "increments afterwards leaves a window for a second thread to pick "
+            "the same node"
+        )
+
+        # The claim is what makes the second caller pick the other node.
+        second = client._await_node("avatar", 0.01, 1.0)
+        assert second.name != first.name
+        assert client.state[second.name].inflight == 1
+
+        # Both slots are now taken, so a third caller waits and then gives up
+        # rather than double-booking a node that declared max_concurrent: 1.
+        with pytest.raises(ClusterError):
+            client._await_node("avatar", 0.01, 0.05)
+
+    def test_two_threads_land_on_different_nodes(self):
+        # Both avatar nodes declare max_concurrent=1. A job that is still in
+        # flight must make its node ineligible for the other thread.
+        transport = FakeTransport(delay=0.15)
+        client, _ = make_client(transport=transport)
+
+        urls = []
+        lock = threading.Lock()
+
+        def dispatch(index):
+            result = client.submit("avatar", {"id": index}, timeout=5)
+            with lock:
+                urls.append(result["node"])
+
+        threads = [threading.Thread(target=dispatch, args=(i,)) for i in range(2)]
+        started = time.monotonic()
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+        elapsed = time.monotonic() - started
+
+        assert sorted(urls) == ["avatar-a", "avatar-c"]
+        # Ran concurrently rather than queued: two 0.15s jobs in series would
+        # take 0.30s, and the loser would also have paid a 2s poll interval.
+        assert elapsed < 0.30
+
+    def test_inflight_returns_to_zero_after_concurrent_jobs(self):
+        transport = FakeTransport(delay=0.02)
+        client, _ = make_client(transport=transport)
+
+        threads = [
+            threading.Thread(target=lambda: client.submit("avatar", {}, timeout=5))
+            for _ in range(8)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=15)
+
+        assert [s.inflight for s in client.state.values()] == [0, 0, 0]
+
+    def test_capacity_counts_slots_for_the_role(self):
+        client, _ = make_client()
+        assert client.capacity("avatar") == 2
+        assert client.capacity("tts") == 1
+        assert client.capacity("media") == 0

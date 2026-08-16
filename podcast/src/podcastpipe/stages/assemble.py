@@ -310,8 +310,64 @@ def mix_music(
     return output
 
 
+def _run_ffmpeg(
+    command: list[str],
+    *,
+    cluster,
+    out_path: Path,
+    env_overlay: dict[str, str] | None = None,
+    log_path: Path | None = None,
+    timeout: int = 14400,
+) -> None:
+    """Run a prepared ffmpeg argv, on a media worker when there is one.
+
+    Encoding has to leave the orchestrator in cluster mode: that container is
+    CPU-only by design, so ``video.encoder: h264_nvenc`` cannot run there at all.
+    The argv is still built here either way -- that logic is unit-tested in this
+    module and has no business being duplicated in the worker, which just runs
+    what it is handed.
+
+    Paths inside the argv are deliberately not rewritten. Every one of them
+    already resolves under the shared root, because the orchestrator sees the
+    share at ``/pipeline`` exactly as the workers do. The translate_path call
+    below asserts that rather than trusting it -- a path outside the share would
+    otherwise surface as a confusing worker-side failure well into the render.
+    """
+    if command[:2] != ["ffmpeg", "-y"]:
+        raise ValueError("expected an ffmpeg argv beginning with 'ffmpeg -y'")
+
+    if cluster is None:
+        run(command, env_overlay=env_overlay, log_path=log_path, timeout=timeout)
+        return
+
+    from ..cluster import ClusterError, translate_path
+
+    translate_path(out_path, cluster.shared_root_local, cluster.shared_root_container)
+    try:
+        # The worker prepends `ffmpeg -y` itself, so hand it everything after.
+        result = cluster.submit(
+            "media",
+            {"task": "encode", "args": [str(a) for a in command[2:]], "out_path": str(out_path)},
+            timeout=timeout,
+        )
+    except ClusterError as exc:
+        raise RuntimeError(f"encode failed on the cluster: {exc}") from exc
+
+    if not Path(out_path).exists():
+        raise RuntimeError(
+            f"{result.get('node', 'media worker')} reported success but {out_path} "
+            "does not exist. Check that every node mounts the share at the same path."
+        )
+    print(f"    encoded on {result.get('node', 'media worker')}")
+
+
 def concat_with_bumpers(
-    main: Path, output: Path, config: Config, intro: Path | None, outro: Path | None
+    main: Path,
+    output: Path,
+    config: Config,
+    intro: Path | None,
+    outro: Path | None,
+    cluster=None,
 ) -> Path:
     """Join intro / main / outro, re-encoding so mismatched sources still join.
 
@@ -348,7 +404,7 @@ def concat_with_bumpers(
         "-movflags", "+faststart",
         str(output),
     ]
-    run(command)
+    _run_ffmpeg(command, cluster=cluster, out_path=output)
     return output
 
 
@@ -359,8 +415,13 @@ def assemble(
     avatar_path: str,
     audio_path: str,
     ass_path: str | None,
+    cluster=None,
 ) -> str:
-    """Build the finished episode video. Returns its path."""
+    """Build the finished episode video. Returns its path.
+
+    With ``cluster`` set, the two NVENC passes run on a media worker; the
+    orchestrator only builds argv and mixes audio, which needs no GPU.
+    """
     video_dir = episode_dir / "video"
     video_dir.mkdir(parents=True, exist_ok=True)
 
@@ -383,9 +444,12 @@ def assemble(
         )
 
     body = video_dir / "body.mp4"
-    print(f"  encoding with {config.video.encoder} on GPU{config.gpu.encode}")
-    run(
+    where = "on a media worker" if cluster is not None else f"on GPU{config.gpu.encode}"
+    print(f"  encoding with {config.video.encoder} {where}")
+    _run_ffmpeg(
         build_encode_command(background, avatar_path, audio, overlays, body, config, ass_path),
+        cluster=cluster,
+        out_path=body,
         env_overlay=config.gpu.env_for("encode"),
         log_path=episode_dir / "logs" / "assemble.log",
         timeout=14400,
@@ -400,6 +464,7 @@ def assemble(
         config,
         intro if intro and intro.exists() else None,
         outro if outro and outro.exists() else None,
+        cluster=cluster,
     )
     if final != body and not final.exists():
         raise RuntimeError("assembly produced no output")

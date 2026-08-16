@@ -22,6 +22,7 @@ base loop.
 from __future__ import annotations
 
 import json
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -101,7 +102,15 @@ def translate_payload(
     treated as paths. Being explicit about which keys are paths avoids mangling a
     field that merely looks path-like, such as a URL or a caption line.
     """
-    path_keys = {"path", "video", "audio", "out_path", "output", "reference_audio"}
+    path_keys = {
+        "path",
+        "video",
+        "audio",
+        "out_path",
+        "output",
+        "reference_audio",
+        "base_loop",
+    }
 
     if isinstance(payload, dict):
         result = {}
@@ -185,6 +194,12 @@ class ClusterClient:
         self.shared_root_container = shared_root_container
         self.max_failures = max_failures
         self.state: dict[str, NodeState] = {n.name: NodeState() for n in self.nodes}
+        # Guards every read-modify-write of `state`. The avatar stage dispatches
+        # from several threads at once so both render nodes stay busy, and
+        # "pick a free node" then "mark it busy" has to be one atomic step --
+        # otherwise two threads select the same idle node and one of them
+        # queues behind the other on a box that declared max_concurrent: 1.
+        self._lock = threading.Lock()
         # Injectable transport so the dispatch logic is testable without a network.
         self._post = poster or _post_json
         self._get = getter or _get_json
@@ -244,6 +259,9 @@ class ClusterClient:
         Blocks while every node is busy rather than queueing locally — the
         orchestrator drives concurrency itself, so a blocked submit means the
         cluster is genuinely saturated.
+
+        Safe to call from several threads at once. ``_await_node`` claims the
+        node it returns, so the caller must not increment ``inflight`` again.
         """
         candidates = self.nodes_for(role)
         if not candidates:
@@ -258,48 +276,59 @@ class ClusterClient:
         for attempt in range(1, attempts + 1):
             # Prefer a node we have not already tried for this job; fall back to
             # retrying the same one when it is the only node for the role.
+            # Returns a node with its in-flight slot already claimed.
             node = self._await_node(role, wait_interval, max_wait, exclude=tried)
             tried.add(node.name)
-            self.state[node.name].inflight += 1
             try:
                 result = self._post(node.endpoint("run"), wire_payload, timeout)
-                self.state[node.name].failures = 0
+                with self._lock:
+                    self.state[node.name].failures = 0
                 result.setdefault("node", node.name)
                 return result
             except Exception as exc:
                 last_error = f"{node.name}: {exc}"
-                node_state = self.state[node.name]
-                node_state.failures += 1
-                node_state.last_error = str(exc)
-                if node_state.failures >= self.max_failures:
-                    # Stop sending work to a node that keeps failing; the health
-                    # probe can bring it back.
-                    node_state.healthy = False
+                with self._lock:
+                    node_state = self.state[node.name]
+                    node_state.failures += 1
+                    node_state.last_error = str(exc)
+                    if node_state.failures >= self.max_failures:
+                        # Stop sending work to a node that keeps failing; the
+                        # health probe can bring it back.
+                        node_state.healthy = False
                 if attempt == attempts:
                     break
             finally:
-                self.state[node.name].inflight -= 1
+                with self._lock:
+                    self.state[node.name].inflight -= 1
 
         raise ClusterError(f"job failed on all attempts for role {role!r}: {last_error}")
 
     def _await_node(
         self, role: str, interval: float, max_wait: float, exclude: Iterable[str] = ()
     ) -> Node:
+        """Block until a node of ``role`` is free, then claim a slot on it.
+
+        Selection and the claim happen together under the lock. Splitting them
+        would let two concurrent callers both see the same node as idle.
+        """
         deadline = time.monotonic() + max_wait
         exclude = set(exclude)
         while True:
-            node = select_node(self.nodes_for(role), self.state, exclude)
-            if node is None and exclude:
-                # Every untried node is busy or gone. Retrying the same node is
-                # still better than failing outright -- a transient error on the
-                # only avatar box should not abandon the episode.
-                node = select_node(self.nodes_for(role), self.state)
-            if node is not None:
-                return node
-            if not any(
-                self.state.get(n.name, NodeState()).healthy and n.enabled
-                for n in self.nodes_for(role)
-            ):
+            with self._lock:
+                node = select_node(self.nodes_for(role), self.state, exclude)
+                if node is None and exclude:
+                    # Every untried node is busy or gone. Retrying the same node
+                    # is still better than failing outright -- a transient error
+                    # on the only avatar box should not abandon the episode.
+                    node = select_node(self.nodes_for(role), self.state)
+                if node is not None:
+                    self.state[node.name].inflight += 1
+                    return node
+                any_healthy = any(
+                    self.state.get(n.name, NodeState()).healthy and n.enabled
+                    for n in self.nodes_for(role)
+                )
+            if not any_healthy:
                 raise NoHealthyNode(
                     f"no healthy node for role {role!r}. Run 'podcastpipe cluster status'."
                 )

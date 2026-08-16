@@ -192,7 +192,7 @@ def cmd_avatar(args: argparse.Namespace) -> int:
 
     print(f"Rendering avatar for {episode_id}")
     started = time.time()
-    path = avatar_stage.render(config, episode_dir, audio)
+    path = avatar_stage.render(config, episode_dir, audio, cluster=_cluster_client(config))
     elapsed = time.time() - started
     database.set_artifact(episode_id, "avatar", path)
     database.log(episode_id, "avatar", "ok", f"{elapsed:.0f}s")
@@ -272,7 +272,10 @@ def cmd_assemble(args: argparse.Namespace) -> int:
 
     print(f"Assembling {episode_id}")
     started = time.time()
-    output = assemble_stage.assemble(config, script, episode_dir, avatar, audio, ass_path)
+    output = assemble_stage.assemble(
+        config, script, episode_dir, avatar, audio, ass_path,
+        cluster=_cluster_client(config),
+    )
     database.set_artifact(episode_id, "video", output)
     database.set_status(episode_id, "rendered")
     database.log(episode_id, "assemble", "ok", f"{time.time() - started:.0f}s")

@@ -126,8 +126,82 @@ def chunk_key(config: Config, audio_path: Path, start: float, length: float) -> 
     return digest.hexdigest()[:16]
 
 
-def render(config: Config, episode_dir: Path, audio_path: str | Path) -> str:
-    """Render the full talking-head track. Returns the path to the silent video."""
+def _render_via_cluster(cluster, config: Config, base_loop: Path, todo: list[dict]) -> None:
+    """Render chunks on the avatar workers, several at a time.
+
+    Concurrent, unlike voice. There is more than one avatar worker, each render
+    runs for minutes, and this is the longest stage of the episode -- dispatching
+    one chunk at a time would leave half the cluster idle for most of it. The
+    threads are nearly free: each spends its life blocked on an HTTP call while a
+    GPU on another machine does the work. Width comes from the cluster's own
+    declared capacity, so adding a third avatar node needs no change here.
+
+    The payload names the base loop rather than shipping any video. Each worker
+    keeps its own local copy, builds its own ping-pong clip once, and slices
+    windows from it -- which is what keeps gigabytes off the 1 GbE.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    from ..cluster import ClusterError
+
+    def render_one(job: dict) -> str:
+        result = cluster.submit(
+            "avatar",
+            {
+                "id": job["id"],
+                "audio": job["audio"],
+                "out_path": job["out_path"],
+                "base_loop": str(base_loop),
+                "fps": config.avatar.fps,
+                "bbox_shift": config.avatar.bbox_shift,
+                # Each window starts at a different point in the loop, so head
+                # motion does not restart in lockstep every chunk and give the
+                # whole episode a visible two-minute cycle.
+                "loop_offset": job["start"],
+            },
+            timeout=7200,
+        )
+        if not Path(job["out_path"]).exists():
+            raise ClusterError(
+                f"{result.get('node', 'worker')} reported success but "
+                f"{job['out_path']} does not exist"
+            )
+        return result.get("node", "worker")
+
+    width = max(1, cluster.capacity("avatar"))
+    print(f"  rendering {len(todo)} chunk(s) across {width} worker(s)")
+
+    failures: list[str] = []
+    done = 0
+    with ThreadPoolExecutor(max_workers=width) as pool:
+        futures = {pool.submit(render_one, job): job for job in todo}
+        for future in as_completed(futures):
+            job = futures[future]
+            done += 1
+            try:
+                node = future.result()
+            except Exception as exc:
+                failures.append(f"{job['id']}: {exc}")
+                print(f"    {done}/{len(todo)}  {job['id']} FAILED")
+            else:
+                print(f"    {done}/{len(todo)}  {job['id']} on {node}")
+
+    if failures:
+        raise RuntimeError(
+            f"{len(failures)} of {len(todo)} avatar chunk(s) failed on the cluster. "
+            f"First: {failures[0]}"
+        )
+
+
+def render(
+    config: Config, episode_dir: Path, audio_path: str | Path, cluster=None
+) -> str:
+    """Render the full talking-head track. Returns the path to the silent video.
+
+    With ``cluster`` set, chunks go to the avatar workers and each builds its own
+    driving video locally. Without it, the driving video is built here and a
+    local venv does the rendering -- the single-machine path.
+    """
     audio_path = Path(audio_path)
     if not audio_path.exists():
         raise FileNotFoundError(f"voice track not found: {audio_path}")
@@ -150,28 +224,35 @@ def render(config: Config, episode_dir: Path, audio_path: str | Path) -> str:
     duration = ffprobe_duration(audio_path)
     fps = config.avatar.fps
 
-    # The ping-pong clip depends only on the base loop, so it is built once and
-    # reused for every episode until the loop itself changes.
-    pingpong = cache / f"pingpong_{hashlib.sha256(str(base_loop).encode()).hexdigest()[:12]}_{fps}.mp4"
-    if not pingpong.exists():
-        print("  building ping-pong base loop (one time per base clip)")
-        run(pingpong_command(base_loop, pingpong, fps), log_path=work / "logs_pingpong.txt")
-
-    driving = work / "driving.mp4"
-    run(extend_command(pingpong, driving, duration, fps), log_path=work / "logs_extend.txt")
+    adapter_name = ADAPTERS.get(config.avatar.renderer)
+    if adapter_name is None:
+        raise ValueError(f"unknown avatar.renderer {config.avatar.renderer!r}")
 
     chunks = plan_chunks(duration, config.avatar.chunk_seconds)
     print(f"  {duration / 60:.1f} min in {len(chunks)} chunk(s)")
 
-    adapter_name = ADAPTERS.get(config.avatar.renderer)
-    if adapter_name is None:
-        raise ValueError(f"unknown avatar.renderer {config.avatar.renderer!r}")
+    # Only the local path needs a driving video here. Cluster workers build
+    # their own from a node-local copy of the base loop, which is the whole
+    # reason gigabytes of footage never cross the network.
+    driving = None
+    if cluster is None:
+        # The ping-pong clip depends only on the base loop, so it is built once
+        # and reused for every episode until the loop itself changes.
+        pingpong = (
+            cache
+            / f"pingpong_{hashlib.sha256(str(base_loop).encode()).hexdigest()[:12]}_{fps}.mp4"
+        )
+        if not pingpong.exists():
+            print("  building ping-pong base loop (one time per base clip)")
+            run(pingpong_command(base_loop, pingpong, fps), log_path=work / "logs_pingpong.txt")
+
+        driving = work / "driving.mp4"
+        run(extend_command(pingpong, driving, duration, fps), log_path=work / "logs_extend.txt")
 
     rendered: list[Path] = []
     jobs = []
     for index, (start, length) in enumerate(chunks):
         audio_chunk = work / f"chunk_{index:03d}.wav"
-        video_chunk = work / f"chunk_{index:03d}.mp4"
         run(slice_command(audio_path, audio_chunk, start, length, is_audio=True))
 
         key = chunk_key(config, audio_chunk, start, length)
@@ -181,17 +262,21 @@ def render(config: Config, episode_dir: Path, audio_path: str | Path) -> str:
             print(f"  chunk {index + 1}/{len(chunks)}: cached")
             continue
 
-        run(slice_command(driving, video_chunk, start, length, is_audio=False))
-        jobs.append(
-            {
-                "id": f"chunk_{index:03d}",
-                "video": str(video_chunk),
-                "audio": str(audio_chunk),
-                "out_path": str(cached),
-            }
-        )
+        job = {
+            "id": f"chunk_{index:03d}",
+            "audio": str(audio_chunk),
+            "out_path": str(cached),
+            "start": start,
+        }
+        if cluster is None:
+            video_chunk = work / f"chunk_{index:03d}.mp4"
+            run(slice_command(driving, video_chunk, start, length, is_audio=False))
+            job["video"] = str(video_chunk)
+        jobs.append(job)
 
-    if jobs:
+    if jobs and cluster is not None:
+        _render_via_cluster(cluster, config, base_loop, jobs)
+    elif jobs:
         job_file = work / "render_jobs.json"
         job_file.write_text(
             json.dumps(
