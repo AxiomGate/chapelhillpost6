@@ -50,6 +50,10 @@ services:
       # TorchScript. MuseTalk's inference path never uses TorchScript, so
       # disabling the compiler skips the fatal import at no cost.
       PYTORCH_JIT: "0"
+      # torch 2.6 flipped torch.load's `weights_only` default to True and
+      # mmengine's checkpoint loader passes no argument, so DWPose and the other
+      # mm* checkpoints refuse to load. See node-b for the full note.
+      TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD: "1"
       PORT: "8081"
     volumes:
       # node-a's share over NFS. Same in-container path as every other node.

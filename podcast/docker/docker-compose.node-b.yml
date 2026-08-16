@@ -64,6 +64,13 @@ services:
       #
       # Remove this once Dockerfile.avatar pins the tested version set.
       PYTORCH_JIT: "0"
+      # The second half of the same torch-2.6 mismatch. 2.6 flipped
+      # torch.load's `weights_only` default to True, and mmengine's checkpoint
+      # loader calls torch.load with no arguments -- so every mmpose/mmdet
+      # checkpoint (they carry pickled meta alongside the tensors) now refuses
+      # to load. These weights are ones we fetched ourselves from known repos,
+      # not untrusted input, which is what the flag is guarding against.
+      TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD: "1"
       PORT: "8081"
     volumes:
       - /mnt/remotes/podcast:/pipeline

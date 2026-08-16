@@ -184,7 +184,15 @@ def _post_json(url: str, payload: dict, timeout: int) -> dict:
         else:
             if isinstance(parsed, dict) and parsed.get("error"):
                 detail = str(parsed["error"])
-        raise ClusterError(f"HTTP {exc.code} from {url}: {detail[:800]}") from exc
+        # Keep the TAIL. A worker error is almost always a traceback or an
+        # ffmpeg run, and in both the useful line is last: the exception itself,
+        # or ffmpeg's complaint after two hundred lines of build configuration.
+        # Truncating from the front reliably keeps the banner and drops the
+        # cause, which is worse than not reporting it at all -- it looks like
+        # information.
+        if len(detail) > 1200:
+            detail = "...(truncated)...\n" + detail[-1200:]
+        raise ClusterError(f"HTTP {exc.code} from {url}: {detail}") from exc
     return json.loads(body) if body else {}
 
 
