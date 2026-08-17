@@ -1,0 +1,139 @@
+# Veterans and military affairs — daily, single host.
+#
+# Anything omitted here is inherited from config/show.yaml. This file states
+# only what differs, which is why it is 100 lines and not 150.
+
+show:
+  # Alternatives if this one does not sit right — swap the line and nothing else
+  # changes: "After Action", "The Watch Floor", "Muster", "Post and Report".
+  name: "The Duty Desk"
+  tagline: "What changed for veterans today, and what to do about it."
+  host: "Michael Hatcher"
+  author_email: "SET_ME@example.com"
+  timezone: "America/New_York"
+  target_minutes: 15
+
+  # The highest-leverage field in this file. Everything the script model knows
+  # about who it is writing for lives here.
+  style_guide: |
+    You are writing for veterans, currently serving members, and their families.
+    Assume they know the vocabulary. Do not explain what the VA is, what a
+    deployment is, or what a claim is. Explaining the basics is the fastest way
+    to lose this audience.
+
+    Plain and direct. Short sentences, active voice, no throat-clearing. Say the
+    thing, then say why it matters to someone it applies to. "The PACT Act
+    presumptive list added three conditions this week" — not "In a development
+    that may be of interest to some veterans."
+
+    Lead every item with what CHANGED. A rule took effect, a deadline moved, a
+    bill advanced, a number was released. If nothing changed, it is not a story.
+
+    Where something is actionable, say exactly what to do and by when. A
+    deadline without a date is useless. A benefit without an eligibility line is
+    worse than useless, because people self-select wrongly in both directions.
+
+    Attribute inside the sentence — "according to the VA's own inspector
+    general" — never in a trailing citation. Say plainly when something is
+    unconfirmed, when reporting conflicts, or when a bill has passed one chamber
+    and not the other. Legislative status gets confused constantly and the
+    difference is everything.
+
+    Respect without reverence. No "heroes," no "thank you for your service," no
+    solemn music-cue phrasing. This audience is being sold that tone all day and
+    is sick of it. Treat them as adults with a practical interest in policy that
+    affects their money, their health care, and their families.
+
+    Never speculate about individual cases, never give legal or medical advice,
+    and never imply a benefit is guaranteed. Point to the authority that decides.
+
+    If a story is thin, treat it as thin and move on.
+
+  # Replaces the base lineup wholesale. ~880 seconds of speech, which lands
+  # around 14.5 minutes with the 0.4s gaps between blocks.
+  segments:
+    - id: cold_open
+      name: "Cold Open"
+      target_seconds: 20
+      instructions: >
+        One or two sentences on the single most consequential thing for veterans
+        today. No greeting, no show name yet. If it is a deadline or a rule
+        change, say the date in this sentence.
+
+    - id: headlines
+      name: "The Rundown"
+      target_seconds: 240
+      instructions: >
+        Greeting, the date, then four to five items at roughly 45 seconds each.
+        Policy and benefits first, then Pentagon and service news, then anything
+        from Congress. For each: what changed, who it affects, what happens next.
+        Skip ceremony, appointments, and human-interest unless there is a
+        genuine policy hook.
+
+    - id: deep_dive
+      name: "The Long Look"
+      target_seconds: 400
+      instructions: >
+        One story with real context. What happened, what led to it, who is
+        affected and roughly how many, what the counterargument is, and what to
+        watch for next. Name the decision-maker and the timeline. If sources
+        conflict, say so and say which is better supported.
+
+    - id: benefits_desk
+      name: "Benefits Desk"
+      target_seconds: 180
+      instructions: >
+        The practical segment. One or two concrete things a listener can act on:
+        an enrollment window, a claim process change, a rate adjustment, a
+        filing deadline. State eligibility in one plain sentence, the action in
+        another, and the deadline in a third. Always point to the official
+        channel that decides — never imply approval is automatic.
+
+    - id: outro
+      name: "Outro"
+      target_seconds: 40
+      instructions: >
+        Thanks, where to find the show, and one line on what is coming tomorrow.
+        No sign-off slogan about service or sacrifice.
+
+# Acronyms the TTS reads as words when they should be spelled out, and vice
+# versa. This is the cheapest quality win available — add to it every single
+# time you hear one mangled.
+pronunciations:
+  "VA": "V A"
+  "DoD": "D O D"
+  "PTSD": "P T S D"
+  "TBI": "T B I"
+  "VFW": "V F W"
+  "TRICARE": "TRY care"
+  "CHAMPVA": "champ V A"
+  "DFAS": "DEE fass"
+  "SGLI": "S G L I"
+  "VBA": "V B A"
+  "VHA": "V H A"
+  "USAA": "U S A A"
+  "NCO": "N C O"
+  "MOS": "M O S"
+  "IED": "I E D"
+  "BAH": "B A H"
+  "PCS": "P C S"
+  "TDY": "T D Y"
+  "ETS": "E T S"
+  "OEF": "O E F"
+  "OIF": "O I F"
+  "GAO": "G A O"
+  "OIG": "O I G"
+  "NDAA": "N D A A"
+
+publish:
+  rss_enabled: true
+  youtube_enabled: false
+  # Set these before publishing anywhere. A feed that goes out under the wrong
+  # host is very hard to unwind once directories have cached it.
+  site_base_url: "https://SET_ME.example.com"
+  media_base_url: "https://SET_ME.example.com/episodes"
+
+video:
+  # Neutral until there is a real brand. Not a service branch colour — using one
+  # implies an affiliation the show does not have.
+  accent: "#2F4858"
