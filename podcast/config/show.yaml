@@ -115,6 +115,12 @@ avatar:
   right_cheek_width: 90
   extra_margin: 10             # padding around the detected face crop
 
+  # Frames pushed through the UNet at once. The first thing to raise if renders
+  # are slow: the avatar worker holds no resident model any more, so a 3090 has
+  # roughly 23 GB free for this. 16 and 32 are worth measuring -- the worker
+  # reports fps_effective per batch so the effect is visible immediately.
+  batch_size: 8
+
 video:
   width: 1920
   height: 1080

@@ -24,6 +24,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -226,47 +227,96 @@ def ensure_driving_video(base_loop: Path, fps: int, needed_seconds: float) -> Pa
     return extended
 
 
+def _windows_of(job: dict) -> list[dict]:
+    """Normalise both payload shapes into one list of windows.
+
+    A batched job carries ``windows``; a single-window job carries the fields at
+    the top level. Accepting both keeps a hand-rolled curl probe -- the fastest
+    way to test a parameter change -- working unchanged.
+    """
+    windows = job.get("windows")
+    if isinstance(windows, list) and windows:
+        return windows
+    return [{
+        "id": job.get("id", ""),
+        "audio": job["audio"],
+        "out_path": job["out_path"],
+        "loop_offset": job.get("loop_offset", 0.0),
+    }]
+
+
 def handle(model, job: dict) -> dict:
-    audio = Path(job["audio"])
-    out_path = Path(job["out_path"])
+    """Render one or more windows in a single MuseTalk invocation.
+
+    Batching is the whole point. scripts.inference reloads the UNet, the VAE,
+    Whisper, DWPose and the face parser on every start -- a minute or more --
+    and the old one-window-per-subprocess design paid that for every chunk of
+    every episode. MuseTalk's own config format takes task_0, task_1, ... and
+    walks them sequentially, so a batch pays the load once.
+
+    Sequentially is the important word. Peak memory stays at one window, which
+    is what lets this coexist with the 60-second window size that OOM-killed the
+    120-second one. Batching windows is not the same as making them bigger.
+    """
     base_loop = Path(job["base_loop"])
     fps = int(job.get("fps", 25))
     bbox_shift = int(job.get("bbox_shift", 0))
+    batch_size = int(job.get("batch_size", 8))
 
-    if not audio.exists():
-        raise FileNotFoundError(f"audio window not found at {audio} inside the container")
     if not base_loop.exists():
         raise FileNotFoundError(f"base loop not found at {base_loop} inside the container")
 
-    duration = _probe_duration(audio)
-    driving = ensure_driving_video(base_loop, fps, duration + 5)
+    windows = _windows_of(job)
+    for window in windows:
+        if not Path(window["audio"]).exists():
+            raise FileNotFoundError(
+                f"audio window not found at {window['audio']} inside the container"
+            )
+
+    durations = [_probe_duration(Path(w["audio"])) for w in windows]
+
+    started = time.monotonic()
+    driving = ensure_driving_video(base_loop, fps, max(durations) + 5)
+    clip_seconds = time.monotonic() - started
+
+    driving_length = _probe_duration(driving)
+    results_by_stem: dict[str, dict] = {}
 
     with tempfile.TemporaryDirectory(dir=str(LOCAL_CACHE), prefix="job_") as tmp:
         workdir = Path(tmp)
-        segment = workdir / "driving.mp4"
+        tasks = []
 
-        # Offset varies per job so consecutive windows do not all start from the
-        # same frame of the loop, which would make the head motion visibly repeat
-        # on a fixed cycle.
-        offset = float(job.get("loop_offset", 0.0)) % max(
-            _probe_duration(driving) - duration - 1, 1.0
-        )
-        _run([
-            "ffmpeg", "-y", "-i", str(driving),
-            "-ss", f"{offset:.3f}", "-t", f"{duration:.3f}",
-            "-an", "-c:v", "libx264", "-crf", "16", "-pix_fmt", "yuv420p",
-            str(segment),
-        ])
+        for index, (window, duration) in enumerate(zip(windows, durations)):
+            audio = Path(window["audio"])
+            # Each task needs its own segment filename: MuseTalk names outputs
+            # after the video and audio stems, and identical video names across
+            # tasks would collide in the results directory.
+            segment = workdir / f"driving_{index:03d}.mp4"
+
+            # Offset varies per window so consecutive windows do not all start
+            # from the same frame of the loop, which would make the head motion
+            # visibly repeat on a fixed cycle.
+            offset = float(window.get("loop_offset", 0.0)) % max(
+                driving_length - duration - 1, 1.0
+            )
+            _run([
+                "ffmpeg", "-y", "-i", str(driving),
+                "-ss", f"{offset:.3f}", "-t", f"{duration:.3f}",
+                "-an", "-c:v", "libx264", "-crf", "16", "-pix_fmt", "yuv420p",
+                str(segment),
+            ])
+            tasks.append(
+                f"task_{index}:\n"
+                f'  video_path: "{segment}"\n'
+                f'  audio_path: "{audio}"\n'
+                f"  bbox_shift: {bbox_shift}\n"
+            )
 
         config = workdir / "task.yaml"
-        config.write_text(
-            "task_0:\n"
-            f'  video_path: "{segment}"\n'
-            f'  audio_path: "{audio}"\n'
-            f"  bbox_shift: {bbox_shift}\n",
-            encoding="utf-8",
-        )
+        config.write_text("".join(tasks), encoding="utf-8")
+
         results = workdir / "results"
+        render_started = time.monotonic()
         _run(
             [sys.executable, "-m", "scripts.inference",
              "--inference_config", str(config),
@@ -286,45 +336,92 @@ def handle(model, job: dict) -> dict:
              "--left_cheek_width", str(int(job.get("left_cheek_width", 90))),
              "--right_cheek_width", str(int(job.get("right_cheek_width", 90))),
              "--extra_margin", str(int(job.get("extra_margin", 10))),
+             "--batch_size", str(batch_size),
              "--use_float16"],
             cwd=MUSETALK_HOME,
         )
+        render_seconds = time.monotonic() - render_started
 
         produced = sorted(results.rglob("*.mp4"))
         if not produced:
-            raise RuntimeError("MuseTalk produced no output for this window")
+            raise RuntimeError(
+                f"MuseTalk produced no output for any of {len(windows)} window(s)"
+            )
 
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        best = max(produced, key=lambda p: p.stat().st_size)
-        # Copy then replace: the destination is on the network share, and a
-        # partial file there would be picked up as a finished window.
-        staging = out_path.with_suffix(".partial.mp4")
-        shutil.copy2(best, staging)
-        staging.replace(out_path)
+        for index, (window, duration) in enumerate(zip(windows, durations)):
+            out_path = Path(window["out_path"])
+            stem = Path(window["audio"]).stem
+            # Match on the audio stem rather than position: MuseTalk does not
+            # promise an output order, and picking by index would silently pair
+            # a window with another window's video.
+            matches = [p for p in produced if stem in p.name]
+            if not matches:
+                matches = [p for p in produced if f"driving_{index:03d}" in p.name]
+            if not matches:
+                results_by_stem[window.get("id", stem)] = {
+                    "ok": False,
+                    "error": f"no MuseTalk output matched window {stem}",
+                }
+                continue
 
-    # MuseTalk can exit 0 having written almost nothing -- one window came back
-    # with 38 frames where 1500 were due, and the worker accepted it because the
-    # file existed. That shipped a frozen minute into a finished episode with no
-    # error anywhere. Count the frames and fail instead, so the scheduler retries
-    # on another node.
-    expected = int(duration * fps)
-    frames = _probe_frames(out_path)
-    if 0 <= frames < expected * 0.9:
-        # Remove it, or the orchestrator's content-hash cache treats this window
-        # as already rendered and the retry never happens.
-        out_path.unlink(missing_ok=True)
+            best = max(matches, key=lambda p: p.stat().st_size)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            # Copy then replace: the destination is on the network share, and a
+            # partial file there would be picked up as a finished window.
+            staging = out_path.with_suffix(".partial.mp4")
+            shutil.copy2(best, staging)
+            staging.replace(out_path)
+
+            # MuseTalk can exit 0 having written almost nothing -- one window
+            # came back with 38 frames where 1500 were due, and the worker
+            # accepted it because the file existed. That shipped a frozen minute
+            # into a finished episode with no error anywhere.
+            expected = int(duration * fps)
+            frames = _probe_frames(out_path)
+            if 0 <= frames < expected * 0.9:
+                # Remove it, or the orchestrator's content-hash cache treats
+                # this window as rendered and the retry never happens.
+                out_path.unlink(missing_ok=True)
+                results_by_stem[window.get("id", stem)] = {
+                    "ok": False,
+                    "error": (
+                        f"only {frames} frames for a {duration:.1f}s window "
+                        f"needing about {expected}"
+                    ),
+                }
+                continue
+
+            results_by_stem[window.get("id", stem)] = {
+                "ok": True,
+                "out_path": str(out_path),
+                "duration": round(duration, 3),
+                "frames": frames if frames >= 0 else expected,
+            }
+
+    failed = {k: v["error"] for k, v in results_by_stem.items() if not v["ok"]}
+    if failed:
+        # All-or-nothing for the batch. A partial success would leave the
+        # scheduler thinking the whole job failed while some windows are already
+        # cached -- which is fine, because the cache is keyed by content and the
+        # retry skips them.
         raise RuntimeError(
-            f"MuseTalk wrote only {frames} frames for a {duration:.1f}s window "
-            f"needing about {expected}, but exited successfully. The output has "
-            "been discarded so this window can be retried."
+            f"{len(failed)} of {len(windows)} window(s) failed: "
+            + "; ".join(f"{k}: {v}" for k, v in list(failed.items())[:3])
         )
 
+    total_frames = sum(r["frames"] for r in results_by_stem.values())
     return {
         "ok": True,
         "id": job.get("id", ""),
-        "out_path": str(out_path),
-        "duration": round(duration, 3),
-        "frames": frames if frames >= 0 else expected,
+        "windows": len(windows),
+        "frames": total_frames,
+        "duration": round(sum(durations), 3),
+        # Reported so the split between one-time clip building and actual
+        # rendering is visible without reading logs on the node.
+        "clip_seconds": round(clip_seconds, 1),
+        "render_seconds": round(render_seconds, 1),
+        "fps_effective": round(total_frames / render_seconds, 2) if render_seconds else 0,
+        "results": results_by_stem,
     }
 
 

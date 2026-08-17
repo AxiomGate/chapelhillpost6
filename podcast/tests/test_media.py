@@ -326,3 +326,52 @@ class TestBumperJoin:
             body, final, config, tmp_path / "nope_intro.mp4", tmp_path / "nope_outro.mp4"
         )
         assert Path(result) == final and final.exists()
+
+
+class TestAvatarBatching:
+    """One MuseTalk invocation per worker instead of one per window.
+
+    scripts.inference reloads every model on each start, so the old
+    one-window-per-request design paid that cost for every chunk of every
+    episode. Batching pays it once per worker. The split has to keep every
+    window exactly once -- a dropped window is a silent gap in the episode.
+    """
+
+    def _jobs(self, count):
+        return [{"id": f"chunk_{i:03d}"} for i in range(count)]
+
+    def test_every_window_appears_exactly_once(self):
+        from podcastpipe.stages.avatar import split_batches
+
+        for count in (1, 2, 3, 4, 7, 15, 40):
+            for width in (1, 2, 3, 5):
+                batches = split_batches(self._jobs(count), width)
+                flat = [j["id"] for b in batches for j in b]
+                assert sorted(flat) == sorted(j["id"] for j in self._jobs(count)), (
+                    f"{count} windows across {width} workers lost or duplicated one"
+                )
+
+    def test_uses_every_worker_when_there_is_work_for_them(self):
+        from podcastpipe.stages.avatar import split_batches
+
+        assert len(split_batches(self._jobs(15), 2)) == 2
+        assert len(split_batches(self._jobs(4), 4)) == 4
+
+    def test_never_makes_more_batches_than_windows(self):
+        from podcastpipe.stages.avatar import split_batches
+
+        # Three idle workers and one window is one batch, not one batch and two
+        # empty requests that would each pay a model load for nothing.
+        assert len(split_batches(self._jobs(1), 3)) == 1
+        assert len(split_batches(self._jobs(2), 5)) == 2
+
+    def test_batches_are_balanced(self):
+        from podcastpipe.stages.avatar import split_batches
+
+        sizes = [len(b) for b in split_batches(self._jobs(15), 2)]
+        assert max(sizes) - min(sizes) <= 1, f"lopsided split {sizes}"
+
+    def test_no_windows_is_no_batches(self):
+        from podcastpipe.stages.avatar import split_batches
+
+        assert split_batches([], 2) == []

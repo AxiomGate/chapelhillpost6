@@ -99,6 +99,10 @@ class AvatarConfig:
     left_cheek_width: int = 90
     right_cheek_width: int = 90
     extra_margin: int = 10
+    # Frames MuseTalk pushes through the UNet at once. Raising it trades VRAM
+    # for throughput and is the first thing to try if the render is slow -- the
+    # 3090s have headroom now that the worker no longer holds a resident model.
+    batch_size: int = 8
 
 
 @dataclass

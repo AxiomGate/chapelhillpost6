@@ -132,15 +132,37 @@ def chunk_key(config: Config, audio_path: Path, start: float, length: float) -> 
     return digest.hexdigest()[:16]
 
 
-def _render_via_cluster(cluster, config: Config, base_loop: Path, todo: list[dict]) -> None:
-    """Render chunks on the avatar workers, several at a time.
+def split_batches(todo: list[dict], width: int) -> list[list[dict]]:
+    """Deal windows across the available workers, round-robin.
 
-    Concurrent, unlike voice. There is more than one avatar worker, each render
-    runs for minutes, and this is the longest stage of the episode -- dispatching
-    one chunk at a time would leave half the cluster idle for most of it. The
-    threads are nearly free: each spends its life blocked on an HTTP call while a
-    GPU on another machine does the work. Width comes from the cluster's own
-    declared capacity, so adding a third avatar node needs no change here.
+    Round-robin rather than contiguous blocks: windows are equal length except
+    at the tail, so equal counts are equal work, and dealing keeps the split
+    stable if the list grows.
+    """
+    width = max(1, min(width, len(todo)))
+    batches: list[list[dict]] = [[] for _ in range(width)]
+    for index, job in enumerate(todo):
+        batches[index % width].append(job)
+    return [b for b in batches if b]
+
+
+def _render_via_cluster(cluster, config: Config, base_loop: Path, todo: list[dict]) -> None:
+    """Render chunks on the avatar workers: one batched job per worker.
+
+    Two things are bought here.
+
+    Concurrency, because there is more than one avatar worker and this is the
+    longest stage of an episode -- dispatching serially would leave half the
+    cluster idle throughout. The threads are nearly free: each sits blocked on
+    an HTTP call while a GPU on another machine works.
+
+    And batching, because scripts.inference reloads the UNet, the VAE, Whisper,
+    DWPose and the face parser on every start. One window per request paid that
+    minute-plus for every chunk of every episode. A batch pays it once per
+    worker per episode instead -- on a 15-minute show, two model loads rather
+    than fifteen. The worker walks its windows sequentially, so peak memory
+    stays at one window and this does not reintroduce the OOM that shrinking
+    chunk_seconds fixed.
 
     The payload names the base loop rather than shipping any video. Each worker
     keeps its own local copy, builds its own ping-pong clip once, and slices
@@ -150,13 +172,11 @@ def _render_via_cluster(cluster, config: Config, base_loop: Path, todo: list[dic
 
     from ..cluster import ClusterError
 
-    def render_one(job: dict) -> str:
+    def render_batch(batch: list[dict]) -> tuple[str, dict]:
         result = cluster.submit(
             "avatar",
             {
-                "id": job["id"],
-                "audio": job["audio"],
-                "out_path": job["out_path"],
+                "id": f"{batch[0]['id']}+{len(batch) - 1}",
                 "base_loop": str(base_loop),
                 "fps": config.avatar.fps,
                 "bbox_shift": config.avatar.bbox_shift,
@@ -164,42 +184,64 @@ def _render_via_cluster(cluster, config: Config, base_loop: Path, todo: list[dic
                 "left_cheek_width": config.avatar.left_cheek_width,
                 "right_cheek_width": config.avatar.right_cheek_width,
                 "extra_margin": config.avatar.extra_margin,
-                # Each window starts at a different point in the loop, so head
-                # motion does not restart in lockstep every chunk and give the
-                # whole episode a visible two-minute cycle.
-                "loop_offset": job["start"],
+                "batch_size": config.avatar.batch_size,
+                "windows": [
+                    {
+                        "id": job["id"],
+                        "audio": job["audio"],
+                        "out_path": job["out_path"],
+                        # Each window starts at a different point in the loop, so
+                        # head motion does not restart in lockstep every chunk
+                        # and give the whole episode a visible cycle.
+                        "loop_offset": job["start"],
+                    }
+                    for job in batch
+                ],
             },
-            timeout=7200,
+            # Scales with the batch. A fixed per-request timeout would abort a
+            # large batch that is progressing perfectly well.
+            timeout=1800 + 1800 * len(batch),
         )
-        if not Path(job["out_path"]).exists():
+        missing = [j["out_path"] for j in batch if not Path(j["out_path"]).exists()]
+        if missing:
             raise ClusterError(
                 f"{result.get('node', 'worker')} reported success but "
-                f"{job['out_path']} does not exist"
+                f"{len(missing)} output(s) do not exist, first: {missing[0]}"
             )
-        return result.get("node", "worker")
+        return result.get("node", "worker"), result
 
     width = max(1, cluster.capacity("avatar"))
-    print(f"  rendering {len(todo)} chunk(s) across {width} worker(s)")
+    batches = split_batches(todo, width)
+    print(
+        f"  rendering {len(todo)} chunk(s) as {len(batches)} batch(es) "
+        f"across {width} worker(s)"
+    )
 
     failures: list[str] = []
     done = 0
-    with ThreadPoolExecutor(max_workers=width) as pool:
-        futures = {pool.submit(render_one, job): job for job in todo}
+    with ThreadPoolExecutor(max_workers=len(batches)) as pool:
+        futures = {pool.submit(render_batch, batch): batch for batch in batches}
         for future in as_completed(futures):
-            job = futures[future]
-            done += 1
+            batch = futures[future]
+            done += len(batch)
             try:
-                node = future.result()
+                node, result = future.result()
             except Exception as exc:
-                failures.append(f"{job['id']}: {exc}")
-                print(f"    {done}/{len(todo)}  {job['id']} FAILED")
+                failures.append(f"{batch[0]['id']}(+{len(batch) - 1}): {exc}")
+                print(f"    {done}/{len(todo)}  batch of {len(batch)} FAILED")
             else:
-                print(f"    {done}/{len(todo)}  {job['id']} on {node}")
+                rate = result.get("fps_effective")
+                print(
+                    f"    {done}/{len(todo)}  {len(batch)} chunk(s) on {node}"
+                    + (f" at {rate} fps" if rate else "")
+                    + f", clip {result.get('clip_seconds', 0)}s"
+                    f" render {result.get('render_seconds', 0)}s"
+                )
 
     if failures:
         raise RuntimeError(
-            f"{len(failures)} of {len(todo)} avatar chunk(s) failed on the cluster. "
-            f"First: {failures[0]}"
+            f"{len(failures)} of {len(batches)} avatar batch(es) failed on the "
+            f"cluster. First: {failures[0]}"
         )
 
 
