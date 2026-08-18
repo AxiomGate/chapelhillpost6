@@ -197,12 +197,24 @@ class Database:
         return len(stories)
 
     def seen_urls(self, within_days: int = 21) -> set[str]:
-        """URLs already attached to an episode in the recent past.
+        """URLs already attached to an episode, within a window of history.
 
-        Used to stop a story recurring. The window is deliberately generous —
-        a slow-moving local story gets re-reported by several outlets over a
-        couple of weeks and it should lead the show once, not four times.
+        Used to stop a story recurring. The default window is deliberately
+        generous — a slow-moving story gets re-reported by several outlets over
+        a couple of weeks and it should lead the show once, not four times.
+
+        ``within_days <= 0`` means all history: no story is ever covered twice.
+        That is the right setting for a show that must be genuinely new every
+        run, and it costs nothing until the table is very large.
+
+        Note this only sees stories that made it into a brief. Items fetched and
+        scored but never selected stay eligible, which is deliberate — being
+        passed over on a busy day should not bury a story forever.
         """
+        if within_days <= 0:
+            rows = self._query("SELECT DISTINCT url FROM stories")
+            return {r["url"] for r in rows}
+
         cutoff = (datetime.now() - timedelta(days=within_days)).strftime("%Y-%m-%d")
         rows = self._query(
             """

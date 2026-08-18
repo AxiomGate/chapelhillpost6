@@ -63,6 +63,151 @@ def _save_brief(brief: Brief, path: Path) -> None:
 # ---- commands -----------------------------------------------------------
 
 
+ARCHIVE_ARTIFACTS = (
+    "video",
+    "mp3",
+    "master_podcast",
+    "master_youtube",
+    "captions_srt",
+    "captions_ass",
+    "avatar",
+)
+ARCHIVE_FILES = ("script.json", "brief.json")
+
+
+def _archive_run(
+    config: Config,
+    database: Database,
+    episode_id: str,
+    episode_dir: Path,
+    label: str = "",
+) -> Path:
+    """Snapshot one finished run into its own timestamped directory.
+
+    Runs are kept individually rather than overwriting a per-episode folder,
+    because the reason to keep a good one is to compare it against the next.
+    A directory of identical-looking episode.mp4 files is nearly useless for
+    that, so each snapshot carries a manifest of the settings that produced it
+    — voice, blend width, batch size, style guide, the lot. When one run sounds
+    or looks better than another, the manifest is what says why.
+    """
+    episode = database.get_episode(episode_id)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    name = f"{episode_id}_{stamp}" + (f"_{label}" if label else "")
+
+    root = (
+        Path(config.publish.archive_dir).expanduser()
+        if config.publish.archive_dir
+        else config.output_dir / "archive"
+    )
+    destination = root / name
+    destination.mkdir(parents=True, exist_ok=True)
+
+    copied: dict[str, str] = {}
+    for key in ARCHIVE_ARTIFACTS:
+        source = (episode.artifacts.get(key) if episode else None) or ""
+        if source and Path(source).exists():
+            target = destination / Path(source).name
+            shutil.copy2(source, target)
+            copied[key] = target.name
+    for filename in ARCHIVE_FILES:
+        if (episode_dir / filename).exists():
+            shutil.copy2(episode_dir / filename, destination / filename)
+            copied[filename] = filename
+
+    raw = config.raw
+    manifest = {
+        "episode_id": episode_id,
+        "archived_at": datetime.now().isoformat(timespec="seconds"),
+        "label": label,
+        "client": config.client or "",
+        "title": (episode.title if episode else "") or "",
+        "status": (episode.status if episode else "") or "",
+        "files": copied,
+        "sizes_bytes": {
+            path.name: path.stat().st_size
+            for path in sorted(destination.iterdir())
+            if path.is_file()
+        },
+        # The settings that made this run what it is. Snapshotted rather than
+        # referenced: config/show.yaml will have moved on by the time anyone
+        # asks why an old run sounded better.
+        "settings": {
+            "show": {
+                k: raw.get("show", {}).get(k)
+                for k in ("name", "host", "tagline", "target_minutes")
+            },
+            "style_guide": raw.get("show", {}).get("style_guide", ""),
+            "segments": [
+                {"id": s.get("id"), "target_seconds": s.get("target_seconds")}
+                for s in raw.get("show", {}).get("segments", []) or []
+            ],
+            "llm": {"model": config.llm.model, "max_tokens": config.llm.max_tokens},
+            "tts": {
+                "engine": config.tts.engine,
+                "reference_audio": config.tts.reference_audio,
+                "exaggeration": config.tts.exaggeration,
+                "cfg_weight": config.tts.cfg_weight,
+                "seed": config.tts.seed,
+            },
+            "avatar": {
+                "renderer": config.avatar.renderer,
+                "base_loop": config.avatar.base_loop,
+                "fps": config.avatar.fps,
+                "chunk_seconds": config.avatar.chunk_seconds,
+                "bbox_shift": config.avatar.bbox_shift,
+                "parsing_mode": config.avatar.parsing_mode,
+                "left_cheek_width": config.avatar.left_cheek_width,
+                "right_cheek_width": config.avatar.right_cheek_width,
+                "extra_margin": config.avatar.extra_margin,
+                "batch_size": config.avatar.batch_size,
+            },
+            "video": {
+                "width": config.video.width,
+                "height": config.video.height,
+                "encoder": config.video.encoder,
+                "cq": config.video.cq,
+                "burn_captions": config.video.burn_captions,
+            },
+            "audio": {
+                "podcast_lufs": config.audio.podcast_lufs,
+                "youtube_lufs": config.audio.youtube_lufs,
+            },
+        },
+    }
+    (destination / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    return destination
+
+
+def cmd_archive(args: argparse.Namespace) -> int:
+    """Keep this run. Copies the deliverables somewhere they will not be
+    overwritten by the next attempt at the same episode."""
+    config, database, episode_id = _context(args)
+    episode_dir = _episode_dir(config, episode_id)
+
+    if database.get_episode(episode_id) is None:
+        print(f"Unknown episode {episode_id}", file=sys.stderr)
+        return 1
+
+    destination = _archive_run(config, database, episode_id, episode_dir, args.label)
+    files = sorted(p.name for p in destination.iterdir() if p.is_file())
+    if len(files) <= 1:
+        print(
+            f"Nothing to archive for {episode_id} — no rendered artifacts found. "
+            "Run the pipeline through assemble or publish first.",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"Archived {episode_id} to {destination}")
+    for name in files:
+        print(f"  {name}")
+    database.log(episode_id, "archive", "ok", str(destination))
+    return 0
+
+
 def cmd_research(args: argparse.Namespace) -> int:
     config, database, episode_id = _context(args)
     episode_dir = _episode_dir(config, episode_id)
@@ -75,8 +220,13 @@ def cmd_research(args: argparse.Namespace) -> int:
     raw = research_stage.fetch_feeds(sources, args.lookback)
     print(f"  {len(raw)} raw items")
 
-    stories = research_stage.dedupe_stories(raw, database.seen_urls(args.dedupe_days))
-    print(f"  {len(stories)} after dedupe")
+    seen = database.seen_urls(args.dedupe_days)
+    stories = research_stage.dedupe_stories(raw, seen)
+    window = "all history" if args.dedupe_days <= 0 else f"{args.dedupe_days}d"
+    print(
+        f"  {len(stories)} after dedupe "
+        f"({len(seen)} previously covered, window {window})"
+    )
     if not stories:
         print("No stories found. Check config/sources.yaml and your network.", file=sys.stderr)
         database.log(episode_id, "research", "failed", "no stories")
@@ -335,17 +485,10 @@ def cmd_publish(args: argparse.Namespace) -> int:
         path = publish_stage.write_feed(config, entries)
         print(f"  feed: {path} ({len(entries)} episodes)")
 
-    if config.publish.archive_dir:
-        archive = Path(config.publish.archive_dir).expanduser() / episode_id
-        archive.mkdir(parents=True, exist_ok=True)
-        for key in ("video", "mp3", "master_podcast", "captions_srt"):
-            source = episode.artifacts.get(key)
-            if source and Path(source).exists():
-                shutil.copy2(source, archive / Path(source).name)
-        for name in ("script.json", "brief.json"):
-            if (episode_dir / name).exists():
-                shutil.copy2(episode_dir / name, archive / name)
-        print(f"  archived to {archive}")
+    # Always snapshot on publish, timestamped. Publishing the same episode twice
+    # used to overwrite the first archive, which quietly destroyed the only copy
+    # of whatever the earlier attempt produced.
+    print(f"  archived to {_archive_run(config, database, episode_id, episode_dir, 'published')}")
 
     database.set_artifact(episode_id, "description", script.description)
     database.set_status(episode_id, "published")
@@ -594,7 +737,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     research = add("research", cmd_research, "gather sources and build the brief")
     research.add_argument("--lookback", type=int, default=36, help="feed window in hours")
-    research.add_argument("--dedupe-days", type=int, default=21)
+    research.add_argument(
+        "--dedupe-days",
+        type=int,
+        default=21,
+        help="days of history to exclude; 0 means never repeat a story",
+    )
     research.add_argument("--max-stories", type=int, default=25)
 
     add("script", cmd_script, "write the script from the brief")
@@ -610,10 +758,18 @@ def build_parser() -> argparse.ArgumentParser:
     publish = add("publish", cmd_publish, "upload and update the feed")
     publish.add_argument("--skip-youtube", action="store_true")
 
+    archive = add("archive", cmd_archive, "keep this run in its own timestamped folder")
+    archive.add_argument(
+        "--label",
+        default="",
+        help="short tag appended to the folder name, e.g. --label cheek50",
+    )
+
     run_cmd = add("run", cmd_run, "research + script, then stop for review")
     run_cmd.add_argument("--yes", action="store_true", help="skip the approval gate")
     run_cmd.add_argument("--lookback", type=int, default=36)
-    run_cmd.add_argument("--dedupe-days", type=int, default=21)
+    run_cmd.add_argument("--dedupe-days", type=int, default=21,
+                         help="days of history to exclude; 0 means never repeat")
     run_cmd.add_argument("--max-stories", type=int, default=25)
     run_cmd.add_argument("--force", action="store_true")
     run_cmd.add_argument("--skip-youtube", action="store_true")

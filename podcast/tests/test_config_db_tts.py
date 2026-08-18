@@ -277,3 +277,58 @@ class TestConfigPathResolution:
         message = str(caught.value)
         assert "PODCASTPIPE_CONFIG" in message
         assert "/pipeline/config/show.yaml" in message
+
+
+class TestArchiveAndFreshness:
+    """Each good run gets kept separately, and no story is covered twice."""
+
+    def test_never_repeat_returns_all_history(self, tmp_path):
+        from podcastpipe.db import Database
+        from podcastpipe.models import Episode, Story
+
+        db = Database(tmp_path / "p.db")
+        # An episode far outside any sane day window.
+        db.upsert_episode(Episode(id="2020-01-01", date="2020-01-01"))
+        db.add_stories("2020-01-01", [
+            Story(url="https://example.com/old", title="Old", source="s", summary="")
+        ])
+
+        # The default window forgets it; 0 means never repeat.
+        assert db.seen_urls(21) == set()
+        assert db.seen_urls(0) == {"https://example.com/old"}
+        assert db.seen_urls(-1) == {"https://example.com/old"}
+
+    def test_recent_stories_are_excluded_either_way(self, tmp_path):
+        from datetime import datetime
+
+        from podcastpipe.db import Database
+        from podcastpipe.models import Episode, Story
+
+        db = Database(tmp_path / "p.db")
+        today = datetime.now().strftime("%Y-%m-%d")
+        db.upsert_episode(Episode(id=today, date=today))
+        db.add_stories(today, [
+            Story(url="https://example.com/new", title="New", source="s", summary="")
+        ])
+        assert "https://example.com/new" in db.seen_urls(21)
+        assert "https://example.com/new" in db.seen_urls(0)
+
+    def test_rerunning_research_sees_its_own_earlier_stories(self, tmp_path):
+        """A second research pass on the same episode must not re-offer what the
+        first pass already put in the brief -- that is what makes each run new."""
+        from datetime import datetime
+
+        from podcastpipe.db import Database
+        from podcastpipe.models import Episode, Story
+
+        db = Database(tmp_path / "p.db")
+        today = datetime.now().strftime("%Y-%m-%d")
+        db.upsert_episode(Episode(id=today, date=today))
+        db.add_stories(today, [
+            Story(url="https://example.com/a", title="A", source="s", summary="")
+        ])
+        db.add_stories(today, [
+            Story(url="https://example.com/b", title="B", source="s", summary="")
+        ])
+        # Appended, not replaced: both runs' picks stay excluded.
+        assert db.seen_urls(0) == {"https://example.com/a", "https://example.com/b"}
