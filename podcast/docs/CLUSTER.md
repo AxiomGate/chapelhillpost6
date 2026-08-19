@@ -62,36 +62,68 @@ clip back (~150 MB, about 1.5 seconds). That is the entire network budget.
 ## Why the pipeline is faster than the sum of its parts
 
 Voice and avatar work at different granularities — voice in ~20-second chunks,
-avatar in 2-minute windows. The scheduler accumulates finished voice chunks until
+avatar in 60-second windows. The scheduler accumulates finished voice chunks until
 a window is full, dispatches it to an avatar worker immediately, and keeps
 synthesizing. Avatar rendering starts about 90 seconds into the episode instead
 of waiting 6–8 minutes for the whole voice track.
 
-| | Single box | Three nodes, as built |
-|---|---|---|
-| Model loads per episode | 3 | **0** |
-| Voice | 4–8 min | ~13 min, overlapped (measured) |
-| Avatar | 30–45 min | **15–23 min** (estimated) |
-| Captions + encode | 7–13 min | 7–13 min |
-| **Total after approval** | **45–70 min** | **23–37 min** |
+Both numbers below are measured, on a 15-minute episode's worth of work:
 
-Only the voice number is measured: **1.42× realtime**, from a 32-chunk run that
-took 173 s of GPU time for 4.1 minutes of audio — better than the 1.19× a single
-8-second probe suggested, because model warm-up amortizes across the batch. An
-18-minute show is therefore about 13 minutes on node-a's one card. Everything in
-the avatar column is still an estimate; no full render has been timed.
+| Stage | Rate | 15-minute episode |
+|---|---|---|
+| Voice, one 3090 | 1.42× realtime | ~11 min |
+| Avatar, two 3090s | 2.85 fps per node | **~66 min** |
+| Captions + encode | — | 7–13 min |
+
+**Voice: 1.42× realtime**, from a 32-chunk run — 173 s of GPU time for 4.1
+minutes of audio. Better than the 1.19× a single 8-second probe suggested,
+because model warm-up amortizes across the batch.
+
+**Avatar: 2.85 frames per second per node, end to end.** A 3.6-minute episode
+rendered in 17.9 minutes across both nodes, against 32 minutes before batching.
+That figure is the whole pipeline — driving-segment slice, face detection, VAE
+encode, UNet, decode, blend, mux — not the UNet alone, which MuseTalk's own
+progress output shows running at over 30 it/s. The gap between 30 and 2.85 is
+where any further optimisation has to come from, and it is not the model.
+
+Two caveats worth carrying:
+
+- **The nodes are not equal.** Same work took 842 s on node-c and 1065 s on
+  node-b, both RTX 3090s — a 27% spread traced to `Dockerfile.avatar` pinning
+  nothing, so the two images were built on different days from different
+  resolved versions. The episode finishes when the slower node does, so this is
+  wall clock, not trivia.
+- **Batching bought less than it looks.** The 32→17.9 minute drop is partly the
+  two saved model loads and partly a much cheaper ping-pong build, after the
+  base loop moved from 1920×1080 to 608×1080. Batching alone is worth roughly
+  3–4 minutes on an episode this size, growing with episode length.
 
 ### Where the next card goes
 
-A **3090 for a second TTS worker**, in node-b or node-c. Not a third avatar, and
-not another A1000.
+A **3090 for a third avatar worker**. Not TTS.
 
-Voice at ~13 minutes and avatar at ~20 across two workers are close enough that
-a third avatar worker would drop avatar to ~13 and make voice the new bottleneck
-— the card would buy nothing. A second TTS card takes voice to ~6 minutes and
-leaves avatar as the honest limit. An A1000 cannot take this job: 8 GB is tight
-against Chatterbox's 6 GB floor, and it runs 4–6× slower than a 3090 even when
-it fits.
+This reverses the advice that stood here until the avatar stage was actually
+timed. The estimate it rested on — avatar and voice at roughly 20 and 13 minutes
+— was wrong in the direction that mattered. Measured, a 15-minute episode is
+**~11 minutes of voice against ~66 minutes of avatar**. Avatar is not merely the
+bottleneck, it is six times everything else combined, and a second TTS card
+would shave ~5 minutes off a 77-minute total.
+
+A third avatar node takes avatar to ~44 minutes. A fourth takes it to ~33. Voice
+does not become the constraint until there are six avatar workers, which is not
+a decision anyone here has to make.
+
+Two things worth trying before buying anything, because both are free:
+
+- **Close the 27% gap between node-b and node-c.** Pinning `Dockerfile.avatar`
+  and rebuilding both to the same versions gets node-b to node-c's rate, which
+  is worth ~8 minutes on a 15-minute episode — most of what a third card buys,
+  at no cost.
+- **Find out where 2.85 fps goes.** The UNet runs at over 30 it/s. Whatever
+  consumes the other 90% is very likely cheaper to fix than to buy around.
+
+An A1000 cannot take an avatar or TTS job: 8 GB is tight against the 6 GB floor
+and it runs 4–6× slower than a 3090 even when it fits.
 
 ---
 
