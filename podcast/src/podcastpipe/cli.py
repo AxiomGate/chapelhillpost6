@@ -92,7 +92,13 @@ def _archive_run(
     or looks better than another, the manifest is what says why.
     """
     episode = database.get_episode(episode_id)
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    now = datetime.now()
+    stamp = now.strftime("%Y%m%d-%H%M%S")
+    # Last four digits of the run time, HHMM. Stamped onto every archived file,
+    # not just the folder: two generations both called episode.mp4 collide the
+    # moment anyone drags them into the same directory to compare them, or
+    # uploads them, which is the whole reason for keeping generations apart.
+    short = now.strftime("%H%M")
     name = f"{episode_id}_{stamp}" + (f"_{label}" if label else "")
 
     root = (
@@ -103,22 +109,31 @@ def _archive_run(
     destination = root / name
     destination.mkdir(parents=True, exist_ok=True)
 
+    def stamped(filename: str) -> str:
+        """episode.mp4 -> episode_1822.mp4, keeping the extension usable."""
+        source = Path(filename)
+        return f"{source.stem}_{short}{source.suffix}"
+
     copied: dict[str, str] = {}
     for key in ARCHIVE_ARTIFACTS:
         source = (episode.artifacts.get(key) if episode else None) or ""
         if source and Path(source).exists():
-            target = destination / Path(source).name
+            target = destination / stamped(Path(source).name)
             shutil.copy2(source, target)
             copied[key] = target.name
     for filename in ARCHIVE_FILES:
         if (episode_dir / filename).exists():
-            shutil.copy2(episode_dir / filename, destination / filename)
-            copied[filename] = filename
+            target = destination / stamped(filename)
+            shutil.copy2(episode_dir / filename, target)
+            copied[filename] = target.name
 
     raw = config.raw
     manifest = {
         "episode_id": episode_id,
-        "archived_at": datetime.now().isoformat(timespec="seconds"),
+        "archived_at": now.isoformat(timespec="seconds"),
+        # The suffix every file in this folder carries, so the manifest can be
+        # matched back to a loose file someone copied out of here.
+        "run_stamp": short,
         "label": label,
         "client": config.client or "",
         "title": (episode.title if episode else "") or "",
@@ -175,7 +190,9 @@ def _archive_run(
             },
         },
     }
-    (destination / "manifest.json").write_text(
+    # Stamped like everything else. A manifest that travels with a file someone
+    # copied out is only useful if it does not collide with the last one.
+    (destination / stamped("manifest.json")).write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     return destination
@@ -193,7 +210,9 @@ def cmd_archive(args: argparse.Namespace) -> int:
 
     destination = _archive_run(config, database, episode_id, episode_dir, args.label)
     files = sorted(p.name for p in destination.iterdir() if p.is_file())
-    if len(files) <= 1:
+    # The manifest is always written, so it is not evidence that anything was
+    # produced. Anything else in the folder is.
+    if not [f for f in files if not f.startswith("manifest")]:
         print(
             f"Nothing to archive for {episode_id} — no rendered artifacts found. "
             "Run the pipeline through assemble or publish first.",

@@ -4,6 +4,7 @@ The TTS tests matter because the cache key is what decides whether editing one
 paragraph re-synthesizes one paragraph or the whole episode."""
 
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -332,3 +333,66 @@ class TestArchiveAndFreshness:
         ])
         # Appended, not replaced: both runs' picks stay excluded.
         assert db.seen_urls(0) == {"https://example.com/a", "https://example.com/b"}
+
+
+class TestArchiveFilenames:
+    """Every generation gets distinct filenames, not just a distinct folder.
+
+    Two runs both producing episode.mp4 collide the moment anyone copies them
+    into one directory to compare, which is the reason to keep runs apart.
+    """
+
+    def _setup(self, tmp_path):
+        from podcastpipe.config import load_config
+        from podcastpipe.db import Database
+        from podcastpipe.models import Episode
+
+        (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "config" / "show.yaml").write_text(
+            "show:\n  name: Stamp\n", encoding="utf-8"
+        )
+        config = load_config(tmp_path / "config" / "show.yaml")
+        episode_dir = config.work_dir / "2026-08-15"
+        (episode_dir / "video").mkdir(parents=True)
+        (episode_dir / "video" / "episode.mp4").write_bytes(b"v")
+        (episode_dir / "script.json").write_text("{}", encoding="utf-8")
+
+        db = Database(config.work_dir / "pipeline.db")
+        db.upsert_episode(Episode(id="2026-08-15", date="2026-08-15"))
+        db.set_artifact("2026-08-15", "video", str(episode_dir / "video" / "episode.mp4"))
+        return config, db, episode_dir
+
+    def test_every_file_carries_the_run_stamp(self, tmp_path, monkeypatch):
+        import json
+
+        from podcastpipe.cli import _archive_run
+
+        monkeypatch.delenv("PODCASTPIPE_CLIENT", raising=False)
+        monkeypatch.delenv("PODCASTPIPE_CONFIG", raising=False)
+        config, db, episode_dir = self._setup(tmp_path)
+
+        dest = _archive_run(config, db, "2026-08-15", episode_dir, "lbl")
+        names = sorted(p.name for p in dest.iterdir())
+        manifest_name = [n for n in names if n.startswith("manifest")][0]
+        stamp = json.loads((dest / manifest_name).read_text())["run_stamp"]
+
+        assert len(stamp) == 4 and stamp.isdigit()
+        for name in names:
+            assert f"_{stamp}" in name, f"{name} is missing the run stamp"
+
+    def test_extensions_survive_stamping(self, tmp_path, monkeypatch):
+        from podcastpipe.cli import _archive_run
+
+        monkeypatch.delenv("PODCASTPIPE_CLIENT", raising=False)
+        monkeypatch.delenv("PODCASTPIPE_CONFIG", raising=False)
+        config, db, episode_dir = self._setup(tmp_path)
+
+        dest = _archive_run(config, db, "2026-08-15", episode_dir, "")
+        names = sorted(p.name for p in dest.iterdir())
+        # A player has to still recognise the file, so the stamp goes before the
+        # extension rather than after it. episode_1822.mp4, not episode.mp4_1822.
+        assert any(n.endswith(".mp4") for n in names)
+        assert any(n.endswith(".json") for n in names)
+        assert not any(re.search(r"_\d{4}$", n) for n in names), (
+            f"a stamp landed after the extension: {names}"
+        )
