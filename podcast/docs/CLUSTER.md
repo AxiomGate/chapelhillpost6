@@ -72,31 +72,47 @@ Both numbers below are measured, on a 15-minute episode's worth of work:
 | Stage | Rate | 15-minute episode |
 |---|---|---|
 | Voice, one 3090 | 1.42× realtime | ~11 min |
-| Avatar, two 3090s | 2.85 fps per node | **~66 min** |
+| Avatar, two 3090s | 2.93 fps per node, +39 s per load | **~64 min** |
 | Captions + encode | — | 7–13 min |
 
 **Voice: 1.42× realtime**, from a 32-chunk run — 173 s of GPU time for 4.1
 minutes of audio. Better than the 1.19× a single 8-second probe suggested,
 because model warm-up amortizes across the batch.
 
-**Avatar: 2.85 frames per second per node, end to end.** A 3.6-minute episode
+**Avatar: 2.93 frames per second per node, end to end.** A 3.6-minute episode
 rendered in 17.9 minutes across both nodes, against 32 minutes before batching.
 That figure is the whole pipeline — driving-segment slice, face detection, VAE
 encode, UNet, decode, blend, mux — not the UNet alone, which MuseTalk's own
-progress output shows running at over 30 it/s. The gap between 30 and 2.85 is
+progress output shows running at over 30 it/s. The gap between 30 and 2.93 is
 where any further optimisation has to come from, and it is not the model.
 
-Two caveats worth carrying:
+Solving the probe and the batch together separates the fixed cost from the rate:
 
-- **The nodes are not equal.** Same work took 842 s on node-c and 1065 s on
-  node-b, both RTX 3090s — a 27% spread traced to `Dockerfile.avatar` pinning
-  nothing, so the two images were built on different days from different
-  resolved versions. The episode finishes when the slower node does, so this is
-  wall clock, not trivia.
-- **Batching bought less than it looks.** The 32→17.9 minute drop is partly the
-  two saved model loads and partly a much cheaper ping-pong build, after the
-  base loop moved from 1920×1080 to 608×1080. Batching alone is worth roughly
-  3–4 minutes on an episode this size, growing with episode length.
+    167.0 s = load + 375 frames / r      (a 15-second probe)
+    1065.6 s = load + 3005 frames / r    (a two-window batch)
+
+    => model load ~39 s, render rate ~2.93 fps
+
+So each MuseTalk invocation costs about 39 seconds before it renders anything,
+which is what batching removes — one load per worker per episode instead of one
+per window.
+
+**The two nodes are the same speed.** That run reported 2.87 fps on node-c and
+2.82 fps on node-b. An earlier reading of this file claimed a 27% gap between
+them and blamed unpinned versions; that was wrong. It came from comparing
+`render_seconds` without noticing the batches were unequal — node-b rendered
+3005 frames and node-c 2417, so node-b did more work in more time at the same
+rate. Identical CPUs (Threadripper 1900X), identical GPUs, and identical package
+versions on both, confirmed by `pip freeze`.
+
+Worth stating because the mistake is easy to repeat: `fps_effective` includes the
+model load, so a short job always looks slower than a long one on the same
+hardware. Compare rates on equal-sized batches, or subtract the ~39 s first.
+
+**Batching bought less than the wall clock suggests.** The 32 → 17.9 minute drop
+is partly the two saved model loads and partly a much cheaper ping-pong build,
+after the base loop moved from 1920×1080 to 608×1080. Batching alone is worth
+roughly 3–4 minutes at this episode length, growing with it.
 
 ### Where the next card goes
 
@@ -113,14 +129,11 @@ A third avatar node takes avatar to ~44 minutes. A fourth takes it to ~33. Voice
 does not become the constraint until there are six avatar workers, which is not
 a decision anyone here has to make.
 
-Two things worth trying before buying anything, because both are free:
-
-- **Close the 27% gap between node-b and node-c.** Pinning `Dockerfile.avatar`
-  and rebuilding both to the same versions gets node-b to node-c's rate, which
-  is worth ~8 minutes on a 15-minute episode — most of what a third card buys,
-  at no cost.
-- **Find out where 2.85 fps goes.** The UNet runs at over 30 it/s. Whatever
-  consumes the other 90% is very likely cheaper to fix than to buy around.
+Before buying anything, find out where 2.93 fps goes. The UNet runs at over
+30 it/s; whatever consumes the other 90% is very likely cheaper to fix than to
+buy around. The first thing to test is the base loop's resolution — the avatar
+is composited into a 768-pixel-wide box, so a 608×1080 source is already larger
+than the output needs, and per-frame decode, blend and write all scale with it.
 
 An A1000 cannot take an avatar or TTS job: 8 GB is tight against the 6 GB floor
 and it runs 4–6× slower than a 3090 even when it fits.

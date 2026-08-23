@@ -1,26 +1,28 @@
 # Pip constraints for the avatar image. Applied to EVERY install in that build
 # via PIP_CONSTRAINT, including MuseTalk's own requirements.txt.
 #
-# A constraints file rather than more pins in the Dockerfile, because the
-# problem is not what we install directly -- it is what MuseTalk's requirements
-# pull in behind us. Pinning numpy on line 1 achieved nothing when requirements
-# .txt then installed an OpenCV compiled against a different numpy ABI, and the
-# build failed with `numpy.core.multiarray failed to import` from inside cv2.
+# These are not chosen by reasoning about what should be compatible. They are
+# `pip freeze` from the images that render today on node-b and node-c, which are
+# byte-identical to each other and demonstrably work. Evidence beats argument
+# here: three builds were lost to a version set that was defensible on paper.
 #
-# Everything here is one ABI family: numpy 1.x, and packages built against it.
-# Do not raise numpy without checking every compiled dependency below, because
-# the failure mode is an ImportError deep inside an unrelated import, not a
-# version conflict pip can see.
+# A range rather than a pin, and the reason matters. MuseTalk's requirements.txt
+# demands numpy==1.23.5; the working images ended up on 1.26.4 because the mm*
+# installs raised it afterwards, and nothing broke. Pinning either exact value
+# fails: 1.26.4 collides with requirements.txt (ResolutionImpossible, which is
+# how the last build died), and 1.23.5 would forbid the upgrade the working
+# images actually took. The range permits both steps in that sequence.
+#
+# The upper bound is the real constraint. numpy 2.x changes the C ABI, and every
+# compiled package here -- cv2, mmcv's ops, torch's extensions -- was built
+# against 1.x.
+numpy>=1.23.5,<2
 
-# The anchor. mmcv 2.1.0's compiled ops are built against the numpy 1.x ABI.
-numpy==1.26.4
-
-# The last OpenCV line built against numpy 1.x. Newer wheels require numpy>=2
-# and fail to import against 1.26 -- which is exactly how this build broke.
-# This is also the version the previously working image happened to resolve to.
+# The last OpenCV built against the numpy 1.x ABI, and what both working images
+# hold. Newer wheels require numpy>=2 and fail to import with
+# `numpy.core.multiarray failed to import` from inside cv2.
 opencv-python==4.9.0.80
-opencv-contrib-python==4.9.0.80
 
 # Keeps pkg_resources available; several packages here still import it from
 # their setup.py, and setuptools 81 removed it.
-setuptools==69.5.1
+setuptools<81

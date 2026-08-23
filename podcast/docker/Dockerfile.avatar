@@ -10,18 +10,20 @@
 # gap between two identical RTX 3090s, because node-b and node-c were built on
 # different days and resolved different versions.
 #
-# The version set below is chosen around one hard constraint: OpenMMLab
-# publishes prebuilt mmcv wheels only for specific torch builds. torch 2.6 has
-# none, so pip falls back to compiling from source, and mmcv's setup.py imports
-# pkg_resources, which modern setuptools removed. torch 2.1.0 + cu121 has a
-# published mmcv 2.1.0 wheel, which is why that is the anchor.
+# The versions below are not reasoned about. They are `pip freeze` from the
+# images running on node-b and node-c today, which render correctly and are
+# byte-identical to each other. An earlier attempt at this file picked a set that
+# was defensible on paper -- torch 2.1 because that is what mmcv 2.1.0 publishes
+# a wheel for -- and cost three failed builds without ever being run.
 #
-# cu121 wheels on a cu124 base image is deliberate and fine: torch bundles its
-# own CUDA runtime, and a driver new enough for 12.4 runs 12.1 code.
+# One consequence to be honest about: mmcv 2.1.0 has no wheel built for torch
+# 2.6, so what is installed here is the cu121/torch2.1 binary running against
+# torch 2.6. That mismatch is why the compose files set PYTORCH_JIT=0 and
+# TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1. It is not elegant, it is what works, and
+# pinning it means it keeps working rather than breaking on the next rebuild.
 #
-# If you change any line in this block, rebuild BOTH avatar nodes. Two nodes on
-# different versions is the failure this pinning exists to prevent, and it shows
-# up as a performance gap rather than an error.
+# Rebuild BOTH avatar nodes on any change here. Two nodes on different versions
+# is what this pinning exists to prevent.
 FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1
@@ -38,15 +40,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY docker/constraints.avatar.txt /etc/pip-constraints.txt
 ENV PIP_CONSTRAINT=/etc/pip-constraints.txt
 
-# setuptools<81 keeps pkg_resources, which several of these packages still
-# import from their setup.py. numpy<2 because the compiled extensions below were
-# built against the 1.x ABI and segfault or refuse to import against 2.x.
-RUN python3.11 -m pip install --no-cache-dir "pip==24.2" "setuptools==69.5.1" "wheel" \
-    && python3.11 -m pip install --no-cache-dir "numpy==1.26.4"
+RUN python3.11 -m pip install --no-cache-dir "pip==24.2" "setuptools==69.5.1" "wheel"
 
 RUN python3.11 -m pip install --no-cache-dir \
-      torch==2.1.0 torchvision==0.16.0 torchaudio==2.1.0 \
-      --index-url https://download.pytorch.org/whl/cu121
+      torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 \
+      --index-url https://download.pytorch.org/whl/cu124
 
 # MuseTalk itself moves. Pin MUSETALK_REF to a commit once a build is known good
 # -- `docker build --build-arg MUSETALK_REF=<sha>` -- or this clone silently
@@ -60,17 +58,20 @@ RUN git clone https://github.com/TMElyralab/MuseTalk /opt/MuseTalk \
 
 RUN python3.11 -m pip install --no-cache-dir -r /opt/MuseTalk/requirements.txt
 
-# mmcv from OpenMMLab's wheel index for exactly this torch build -- never PyPI,
-# which has no wheel and would compile from source. mmdet and mmpose are pure
-# Python and come from PyPI at the versions MuseTalk is tested against.
+# mmcv from OpenMMLab's wheel index -- never PyPI, which has no wheel for this
+# and would compile from source, where setup.py imports the pkg_resources that
+# setuptools 81 removed.
 #
-# Installed with plain pip rather than openmim: openmim pulls in openxlab, which
-# pins setuptools~=60.2, requests 2.28 and pytz 2023.4, downgrading half the
-# image on its way past.
-RUN python3.11 -m pip install --no-cache-dir "mmengine==0.10.3" \
+# The cu121/torch2.1.0 index is deliberate even though torch here is 2.6: there
+# is no torch 2.6 index, and this is the binary the working images contain. The
+# ABI mismatch is real and is what the PYTORCH_JIT=0 workaround exists for.
+#
+# Plain pip rather than openmim: openmim pulls in openxlab, which pins
+# setuptools~=60.2, requests 2.28 and pytz 2023.4, downgrading half the image.
+RUN python3.11 -m pip install --no-cache-dir "mmengine==0.10.7" \
     && python3.11 -m pip install --no-cache-dir "mmcv==2.1.0" \
        -f https://download.openmmlab.com/mmcv/dist/cu121/torch2.1.0/index.html \
-    && python3.11 -m pip install --no-cache-dir "mmdet==3.1.0" "mmpose==1.1.0"
+    && python3.11 -m pip install --no-cache-dir "mmdet==3.3.0" "mmpose==1.3.2"
 
 RUN python3.11 -m pip install --no-cache-dir \
       "fastapi==0.115.0" "uvicorn==0.30.6" "pydantic==2.9.2"
@@ -78,7 +79,10 @@ RUN python3.11 -m pip install --no-cache-dir \
 # Fail the build rather than the first render. An image that cannot import
 # mmcv.ops is useless, and finding that out here costs a minute instead of
 # twenty and a confusing exit code on a node.
-RUN python3.11 -c "\
+# PYTORCH_JIT=0 here for the same reason the compose files set it: importing
+# mmcv.ops on torch 2.6 segfaults inside the TorchScript compiler. The check
+# would otherwise fail on an image that runs perfectly well at runtime.
+RUN PYTORCH_JIT=0 python3.11 -c "\
 import numpy, cv2, torch, mmcv, mmdet, mmpose; \
 from mmcv.ops import nms; \
 print('numpy', numpy.__version__, '| cv2', cv2.__version__); \
