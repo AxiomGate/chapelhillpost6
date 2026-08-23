@@ -5,10 +5,14 @@
 #
 # The unpinned version of this file caused, in order: a SIGSEGV importing
 # mmcv.ops on torch 2.6; every mm* checkpoint refusing to load after torch 2.6
-# flipped torch.load's weights_only default; a build that stopped working
-# entirely when pip fell back to the mmcv source tarball; and a 27% throughput
-# gap between two identical RTX 3090s, because node-b and node-c were built on
-# different days and resolved different versions.
+# flipped torch.load's weights_only default; and finally a build that stopped
+# working entirely when pip fell back to the mmcv source tarball. The running
+# images could not be recreated from either recipe.
+#
+# It was also blamed for a 27% throughput gap between the two avatar nodes.
+# That was wrong -- the nodes are the same speed, and the gap was an artefact of
+# comparing unequal batches. Pinning is worth doing for reproducibility, not for
+# performance. Nothing here will make a render faster.
 #
 # The versions below are not reasoned about. They are `pip freeze` from the
 # images running on node-b and node-c today, which render correctly and are
