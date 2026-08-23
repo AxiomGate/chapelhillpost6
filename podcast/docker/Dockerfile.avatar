@@ -30,6 +30,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ffmpeg git build-essential libgl1 libglib2.0-0 curl \
     && rm -rf /var/lib/apt/lists/*
 
+# Applied to EVERY pip install below, including MuseTalk's requirements.txt.
+# Pinning in the Dockerfile alone was not enough: requirements.txt runs after
+# our pins and pulled in an OpenCV built against the numpy 2.x ABI, which then
+# failed to import against the numpy 1.x that mmcv needs. A constraints file is
+# the only thing that reaches installs we do not write.
+COPY docker/constraints.avatar.txt /etc/pip-constraints.txt
+ENV PIP_CONSTRAINT=/etc/pip-constraints.txt
+
 # setuptools<81 keeps pkg_resources, which several of these packages still
 # import from their setup.py. numpy<2 because the compiled extensions below were
 # built against the 1.x ABI and segfault or refuse to import against 2.x.
@@ -71,11 +79,12 @@ RUN python3.11 -m pip install --no-cache-dir \
 # mmcv.ops is useless, and finding that out here costs a minute instead of
 # twenty and a confusing exit code on a node.
 RUN python3.11 -c "\
-import torch, numpy, mmcv, mmdet, mmpose; \
+import numpy, cv2, torch, mmcv, mmdet, mmpose; \
 from mmcv.ops import nms; \
-print('torch', torch.__version__, '| numpy', numpy.__version__); \
+print('numpy', numpy.__version__, '| cv2', cv2.__version__); \
+print('torch', torch.__version__, '| cuda', torch.version.cuda); \
 print('mmcv', mmcv.__version__, '| mmdet', mmdet.__version__, '| mmpose', mmpose.__version__); \
-print('mmcv.ops import OK')"
+print('ALL IMPORTS OK')"
 
 COPY cluster/ /opt/worker/
 WORKDIR /opt/worker

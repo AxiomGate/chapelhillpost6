@@ -1,0 +1,26 @@
+# Pip constraints for the avatar image. Applied to EVERY install in that build
+# via PIP_CONSTRAINT, including MuseTalk's own requirements.txt.
+#
+# A constraints file rather than more pins in the Dockerfile, because the
+# problem is not what we install directly -- it is what MuseTalk's requirements
+# pull in behind us. Pinning numpy on line 1 achieved nothing when requirements
+# .txt then installed an OpenCV compiled against a different numpy ABI, and the
+# build failed with `numpy.core.multiarray failed to import` from inside cv2.
+#
+# Everything here is one ABI family: numpy 1.x, and packages built against it.
+# Do not raise numpy without checking every compiled dependency below, because
+# the failure mode is an ImportError deep inside an unrelated import, not a
+# version conflict pip can see.
+
+# The anchor. mmcv 2.1.0's compiled ops are built against the numpy 1.x ABI.
+numpy==1.26.4
+
+# The last OpenCV line built against numpy 1.x. Newer wheels require numpy>=2
+# and fail to import against 1.26 -- which is exactly how this build broke.
+# This is also the version the previously working image happened to resolve to.
+opencv-python==4.9.0.80
+opencv-contrib-python==4.9.0.80
+
+# Keeps pkg_resources available; several packages here still import it from
+# their setup.py, and setuptools 81 removed it.
+setuptools==69.5.1
