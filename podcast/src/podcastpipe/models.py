@@ -14,11 +14,22 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable
 
-# Measured pace for a conversational news read. Used in two places that must
-# agree: the runtime estimate reported after a script is written, and the word
-# budgets handed to the model when writing one. If those two drift apart, the
-# script is told to hit a length that is then judged against a different scale.
-WORDS_PER_MINUTE = 150
+# Measured pace of the synthesized voice, in words per minute of finished audio.
+#
+# Not a textbook figure. 1961 words of script produced an 11.1 minute voice
+# track on 2026-08-26, which is 177 wpm -- and that number includes the 0.35s
+# gap between blocks, so it is the rate that actually converts a word count into
+# runtime. The textbook 150 was here first and is why a script written to fill
+# 15 minutes came out at 11: every budget was about 15% short.
+#
+# Re-measure if the voice changes. `podcastpipe tts` prints the track length and
+# `status` has the word count; divide one by the other. A reference recording at
+# a different speaking pace moves this number.
+#
+# Used in two places that must agree: the word budgets handed to the model when
+# writing a script, and the runtime estimate reported after one is written. If
+# they drift apart, a correct script gets flagged as the wrong length.
+WORDS_PER_MINUTE = 175
 
 EpisodeStatus = str  # new | researched | scripted | approved | rendered | published
 

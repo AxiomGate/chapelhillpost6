@@ -258,9 +258,15 @@ class TestWordBudgets:
             ],
         )
         prompt = build_prompt(config, self._brief())
-        # 20s at 150 wpm is 50 words; 400s is 1000.
-        assert "write about 50 words" in prompt
-        assert "write about 1000 words" in prompt
+        # Derived from the rate, not hardcoded: recalibrating the pace against a
+        # new voice must not break this test, only change the numbers in it.
+        from podcastpipe.models import WORDS_PER_MINUTE
+
+        def words(seconds):
+            return int(round(seconds / 60 * WORDS_PER_MINUTE / 10) * 10)
+
+        assert f"write about {words(20)} words" in prompt
+        assert f"write about {words(400)} words" in prompt
 
     def test_total_is_the_sum_of_the_segments(self, tmp_path):
         from podcastpipe.stages.script import build_prompt
@@ -274,7 +280,10 @@ class TestWordBudgets:
             ],
         )
         prompt = build_prompt(config, self._brief())
-        assert "about 2100 words" in prompt
+        from podcastpipe.models import WORDS_PER_MINUTE
+
+        total = int(round((240 + 400 + 200) / 60 * WORDS_PER_MINUTE / 10) * 10)
+        assert f"about {total} words" in prompt
 
     def test_budget_and_runtime_estimate_use_the_same_rate(self):
         # If these drift, the script is told to hit one length and then judged

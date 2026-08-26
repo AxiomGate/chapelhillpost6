@@ -405,6 +405,26 @@ docker exec podcast-orchestrator podcastpipe --help
 
 New subcommands showing up there is the cheapest proof the mount is live.
 
+### Running a long stage without losing it
+
+`docker exec` dies with the client that started it. Wrapping it in `nohup` looks
+like it helps and does not: nohup protects the local client process, the daemon
+still kills the process inside the container, and the log simply stops
+mid-stage with no error. A dropped SSH session cost an avatar render this way.
+
+Detach inside the container instead, and write the log to the share:
+
+```bash
+docker exec -d podcast-orchestrator sh -c \
+  'podcastpipe --client firstrun finish --date 2026-08-26 > /pipeline/finish-0826.log 2>&1'
+tail -f /mnt/user/podcast/finish-0826.log     # safe to Ctrl-C, safe to disconnect
+```
+
+Losing a run mid-stage is survivable regardless: TTS chunks and avatar clips are
+cached by content, so re-running resumes rather than restarting. `0 to
+synthesize, 60 cached` on a resumed run is the cache working, not a skipped
+stage.
+
 **Restarting a worker** costs one model load (60–90 s) and nothing else. Jobs in
 flight fail, get retried on another node if one exists, and the episode
 continues.
