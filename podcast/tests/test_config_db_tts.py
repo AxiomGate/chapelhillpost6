@@ -396,3 +396,53 @@ class TestArchiveFilenames:
         assert not any(re.search(r"_\d{4}$", n) for n in names), (
             f"a stamp landed after the extension: {names}"
         )
+
+
+class TestReferenceInvalidatesCache:
+    """Re-recording the voice must re-synthesize.
+
+    Saving a new recording over assets/voice/reference.wav leaves the path
+    identical, so a cache keyed on the path alone returns the whole episode in
+    the old voice with nothing to indicate why.
+    """
+
+    def _config(self, tmp_path, ref_bytes):
+        (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "config" / "show.yaml").write_text(
+            yaml.safe_dump({"tts": {"reference_audio": "assets/voice/reference.wav"}}),
+            encoding="utf-8",
+        )
+        ref = tmp_path / "assets" / "voice" / "reference.wav"
+        ref.parent.mkdir(parents=True, exist_ok=True)
+        ref.write_bytes(ref_bytes)
+        return load_config(tmp_path / "config" / "show.yaml"), ref
+
+    def test_same_reference_keeps_the_cache(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("PODCASTPIPE_CLIENT", raising=False)
+        monkeypatch.delenv("PODCASTPIPE_CONFIG", raising=False)
+        config, _ = self._config(tmp_path, b"original voice")
+        assert chunk_hash("hello", config) == chunk_hash("hello", config)
+
+    def test_new_recording_at_the_same_path_invalidates(self, tmp_path, monkeypatch):
+        import os
+
+        monkeypatch.delenv("PODCASTPIPE_CLIENT", raising=False)
+        monkeypatch.delenv("PODCASTPIPE_CONFIG", raising=False)
+        config, ref = self._config(tmp_path, b"original voice")
+        before = chunk_hash("hello", config)
+
+        # A different recording, same filename -- exactly what re-recording does.
+        ref.write_bytes(b"a completely different and longer recording")
+        os.utime(ref, (1_800_000_000, 1_800_000_000))
+
+        assert chunk_hash("hello", config) != before, (
+            "a new reference recording must re-synthesize, not reuse the old voice"
+        )
+
+    def test_missing_reference_is_its_own_key(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("PODCASTPIPE_CLIENT", raising=False)
+        monkeypatch.delenv("PODCASTPIPE_CONFIG", raising=False)
+        config, ref = self._config(tmp_path, b"original voice")
+        present = chunk_hash("hello", config)
+        ref.unlink()
+        assert chunk_hash("hello", config) != present

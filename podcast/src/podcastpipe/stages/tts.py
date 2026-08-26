@@ -32,6 +32,27 @@ class ChunkJob:
     out_path: str
 
 
+def reference_fingerprint(config: Config) -> str:
+    """Identify the reference recording by contents, not by its path.
+
+    Re-recording your voice and saving it over assets/voice/reference.wav is the
+    normal way to change it, and the path is identical afterwards. Keying the
+    cache on the path alone means every chunk stays "valid" and the whole
+    episode comes back in the old voice, with nothing to indicate why.
+
+    Size and mtime, not a hash of the audio: this runs once per chunk while
+    planning, and a stat is free where reading a megabyte is not.
+    """
+    try:
+        stat = config.path(config.tts.reference_audio).stat()
+    except OSError:
+        # Missing is a real state and gets its own key. The caller reports the
+        # missing file properly; returning a constant here just means the cache
+        # does not silently answer for it.
+        return "missing"
+    return f"{stat.st_size}:{int(stat.st_mtime)}"
+
+
 def chunk_hash(text: str, config: Config) -> str:
     """Cache key for a synthesized chunk.
 
@@ -44,6 +65,7 @@ def chunk_hash(text: str, config: Config) -> str:
             text,
             config.tts.engine,
             config.tts.reference_audio,
+            reference_fingerprint(config),
             str(config.tts.seed),
             str(config.tts.exaggeration),
             str(config.tts.cfg_weight),
