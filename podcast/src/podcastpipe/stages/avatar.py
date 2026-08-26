@@ -168,6 +168,9 @@ def _render_via_cluster(cluster, config: Config, base_loop: Path, todo: list[dic
     keeps its own local copy, builds its own ping-pong clip once, and slices
     windows from it -- which is what keeps gigabytes off the 1 GbE.
     """
+    import threading
+    import time
+
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     from ..cluster import ClusterError
@@ -217,26 +220,62 @@ def _render_via_cluster(cluster, config: Config, base_loop: Path, todo: list[dic
         f"across {width} worker(s)"
     )
 
+    # Nothing above prints again until a whole batch returns, which at this
+    # episode length is about half an hour of total silence per batch. A healthy
+    # render and a hung one look identical from the log, and the only way to tell
+    # them apart was to open nvidia-smi on another machine.
+    #
+    # Each window writes its own file as it finishes, so the share already knows
+    # the answer -- this just reports it. Counted rather than asked of the worker
+    # because it needs no protocol change and works even if a worker has stopped
+    # answering, which is exactly when the question matters most.
+    stop_progress = threading.Event()
+
+    def report_progress() -> None:
+        started = time.monotonic()
+        last_count = 0
+        last_print = 0.0
+        while not stop_progress.wait(30.0):
+            elapsed = time.monotonic() - started
+            count = sum(1 for job in todo if Path(job["out_path"]).exists())
+            # Print on any change, and otherwise every five minutes so a long
+            # single chunk still shows a heartbeat rather than nothing.
+            if count == last_count and elapsed - last_print < 300:
+                continue
+            last_count, last_print = count, elapsed
+            line = f"    ~{count}/{len(todo)} chunks after {elapsed / 60:.0f} min"
+            if count:
+                remaining = (len(todo) - count) * (elapsed / count)
+                line += f", about {remaining / 60:.0f} min left"
+            print(line, flush=True)
+
+    progress = threading.Thread(target=report_progress, daemon=True)
+    progress.start()
+
     failures: list[str] = []
     done = 0
-    with ThreadPoolExecutor(max_workers=len(batches)) as pool:
-        futures = {pool.submit(render_batch, batch): batch for batch in batches}
-        for future in as_completed(futures):
-            batch = futures[future]
-            done += len(batch)
-            try:
-                node, result = future.result()
-            except Exception as exc:
-                failures.append(f"{batch[0]['id']}(+{len(batch) - 1}): {exc}")
-                print(f"    {done}/{len(todo)}  batch of {len(batch)} FAILED")
-            else:
-                rate = result.get("fps_effective")
-                print(
-                    f"    {done}/{len(todo)}  {len(batch)} chunk(s) on {node}"
-                    + (f" at {rate} fps" if rate else "")
-                    + f", clip {result.get('clip_seconds', 0)}s"
-                    f" render {result.get('render_seconds', 0)}s"
-                )
+    try:
+        with ThreadPoolExecutor(max_workers=len(batches)) as pool:
+            futures = {pool.submit(render_batch, batch): batch for batch in batches}
+            for future in as_completed(futures):
+                batch = futures[future]
+                done += len(batch)
+                try:
+                    node, result = future.result()
+                except Exception as exc:
+                    failures.append(f"{batch[0]['id']}(+{len(batch) - 1}): {exc}")
+                    print(f"    {done}/{len(todo)}  batch of {len(batch)} FAILED", flush=True)
+                else:
+                    rate = result.get("fps_effective")
+                    print(
+                        f"    {done}/{len(todo)}  {len(batch)} chunk(s) on {node}"
+                        + (f" at {rate} fps" if rate else "")
+                        + f", clip {result.get('clip_seconds', 0)}s"
+                        f" render {result.get('render_seconds', 0)}s",
+                        flush=True,
+                    )
+    finally:
+        stop_progress.set()
 
     if failures:
         raise RuntimeError(
