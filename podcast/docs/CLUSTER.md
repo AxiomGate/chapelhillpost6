@@ -393,4 +393,5 @@ it manually.
 | Avatar much slower than 30–45 min | Scratch is on the parity array, not a cache pool. Check the `/scratch` bind mount. |
 | `need 8000 MB of VRAM, only 3200 MB free` | Another container holds the card. See step 4. |
 | Renders fine, video and audio drift | Base loop fps differs from `avatar.fps`. Check with `ffprobe`. |
+| Audio or video stutters, cuts in and out, seems to buffer | You are playing it over SMB. Copy the file locally first, then play the copy. SMB is latency-bound rather than bandwidth-bound, so it stutters over Tailscale even on a 128 kbps MP3. Confirm the file itself with `ffmpeg -af silencedetect` before believing a playback symptom. |
 | Workers restart-loop on startup | Healthcheck `start_period` too short for the model load, or the load itself is failing. `docker logs` shows which. |
