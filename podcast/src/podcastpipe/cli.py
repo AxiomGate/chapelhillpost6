@@ -690,6 +690,61 @@ def cmd_clients(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_feeds(args: argparse.Namespace) -> int:
+    """Check every configured feed and report which ones actually work.
+
+    A dead feed does not fail a run -- research skips it and carries on, which is
+    correct behaviour and also why a show can quietly lose half its sources and
+    still produce a brief every morning. This makes that state something you can
+    look at directly instead of inferring from a thin episode.
+
+    Exits non-zero if any feed is broken, so it can gate a deploy.
+    """
+    config = load_config(args.config, getattr(args, "client", None))
+    sources = research_stage.load_sources(config.sources_path())
+    feeds = sources.get("feeds", []) or []
+    if not feeds:
+        print(f"No feeds configured in {config.sources_path()}", file=sys.stderr)
+        return 1
+
+    print(f"Checking {len(feeds)} feeds for {config.label()}")
+    broken: list[tuple[str, str]] = []
+    for feed in feeds:
+        url = feed.get("url")
+        name = feed.get("name", url)
+        if not url:
+            continue
+        parsed, error = research_stage.fetch_feed(url, timeout=args.timeout)
+        if error is not None:
+            print(f"  ! {name}\n      {url}\n      {error}")
+            broken.append((name, url))
+            continue
+        recent = sum(
+            1
+            for entry in parsed.entries
+            if research_stage.is_recent(
+                research_stage.parse_entry_date(
+                    entry.get("published")
+                    or entry.get("updated")
+                    or entry.get("published_parsed")
+                ),
+                args.lookback,
+            )
+        )
+        print(f"  · {name}: {len(parsed.entries)} items, {recent} within {args.lookback}h")
+
+    if broken:
+        print(
+            f"\n{len(broken)} of {len(feeds)} feeds are broken. Fix the URL in "
+            f"{config.sources_path()} or delete the entry — a source that is "
+            "listed but never returns anything is worse than no source at all.",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"\nAll {len(feeds)} feeds OK.")
+    return 0
+
+
 def cmd_cluster(args: argparse.Namespace) -> int:
     """Show every worker's health, GPU, VRAM and throughput."""
     config = load_config(args.config, getattr(args, "client", None))
@@ -812,6 +867,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     clients_cmd = sub.add_parser("clients", help="list configured client profiles")
     clients_cmd.set_defaults(handler=cmd_clients)
+
+    feeds_cmd = sub.add_parser("feeds", help="check every configured news feed")
+    feeds_cmd.add_argument("--lookback", type=int, default=36)
+    feeds_cmd.add_argument("--timeout", type=int, default=20)
+    feeds_cmd.set_defaults(handler=cmd_feeds)
 
     cluster = sub.add_parser("cluster", help="show worker node health")
     cluster.add_argument("--timeout", type=int, default=5)

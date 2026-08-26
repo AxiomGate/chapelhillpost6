@@ -1,15 +1,18 @@
 # Feeds for this client only. Nothing here is shared with other clients.
 #
-# THESE URLS ARE UNVERIFIED. Publishers move and retire feeds constantly, and a
-# dead feed fails quietly — research just returns fewer stories. Before trusting
-# this list, run:
+# Publishers move and retire feeds constantly, and a dead feed fails quietly —
+# research just returns fewer stories. Check this list with:
 #
-#   podcastpipe --client firstrun research --lookback 72
+#   podcastpipe --client firstrun feeds
 #
-# It prints a per-feed item count. Anything reporting 0 or an error needs its
-# URL fixed or the entry deleted. Ten working feeds beat thirty half-working
-# ones, and a show that silently lost half its sources looks like a show with
-# nothing to say.
+# It reports per-feed item counts and exits non-zero if anything is broken. Ten
+# working feeds beat thirty half-working ones, and a show that silently lost half
+# its sources looks like a show with nothing to say.
+#
+# Note that "unreadable feed" is not proof a URL is dead. Several publishers here
+# answer non-browser requests with an HTML challenge page, which the XML parser
+# reports as a syntax error; the fetcher sends a browser user-agent for exactly
+# that reason. Confirm with `feeds` before replacing a URL.
 #
 # `weight` multiplies a story's relevance score, so it expresses "this source
 # outranks that one" without hand-editing results every morning.
@@ -30,8 +33,13 @@ feeds:
   - name: "Military Times"
     url: "https://www.militarytimes.com/arc/outboundfeeds/rss/?outputType=xml"
     weight: 1.1
+  # Stripes serves feeds from subscribe.stripes.com, not the main site. Their
+  # veterans feed is exactly this show's beat, so it outranks the general one.
+  - name: "Stars and Stripes — Veterans"
+    url: "https://subscribe.stripes.com/rss/veterans.xml"
+    weight: 1.3
   - name: "Stars and Stripes"
-    url: "https://www.stripes.com/news/feed/"
+    url: "https://subscribe.stripes.com/rss/top-news.xml"
     weight: 1.0
   - name: "Task & Purpose"
     url: "https://taskandpurpose.com/feed/"
@@ -49,8 +57,12 @@ feeds:
   - name: "The War Horse"
     url: "https://thewarhorse.org/feed/"
     weight: 1.2
+  # VA OIG publishes its feeds under va.gov/oig, not the vaoig.gov vanity domain.
+  # This URL is a best guess at the reports feed on that host and has not been
+  # confirmed from a machine that can reach it -- run `podcastpipe --client
+  # firstrun feeds` and fix or delete this entry based on what it says.
   - name: "VA Office of Inspector General"
-    url: "https://www.vaoig.gov/rss/reports.xml"
+    url: "https://www.va.gov/oig/rss/reports.xml"
     weight: 1.2
 
 # Keyword weights drive relevance scoring. A hit in the headline counts double a

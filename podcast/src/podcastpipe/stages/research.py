@@ -170,11 +170,82 @@ def load_sources(path: str | Path) -> dict[str, Any]:
         return yaml.safe_load(handle) or {}
 
 
+# Several publishers on this beat sit behind bot filtering that answers
+# feedparser's default user-agent with an HTML challenge page. The feed is fine;
+# the request is what gets rejected. That failure is indistinguishable from a
+# dead URL at the call site -- both surface as "not well-formed (invalid token)"
+# -- which is how two working Military.com feeds and Stars and Stripes spent a
+# week looking retired. The giveaway was that all three failed at the same byte
+# offset in the response: one shared block page, not three broken feeds.
+FEED_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
+
+FEED_ACCEPT = (
+    "application/rss+xml, application/atom+xml, application/xml;q=0.9, "
+    "text/xml;q=0.9, */*;q=0.8"
+)
+
+
+def _looks_like_html(body: bytes, content_type: str) -> bool:
+    """Whether a response is a web page rather than a feed.
+
+    Checked before the XML error is reported, because "the server sent you a
+    login wall" and "this XML is malformed" need completely different fixes and
+    the parser describes both as a syntax error.
+    """
+    if "html" in (content_type or "").lower():
+        return True
+    head = body[:512].lstrip().lower()
+    return head.startswith(b"<!doctype html") or head.startswith(b"<html")
+
+
+def fetch_feed(url: str, *, agent: str = FEED_AGENT, timeout: int = 20):
+    """Fetch and parse one feed. Returns ``(parsed, error)``; error is None on success.
+
+    The fetch is done here rather than handed to ``feedparser.parse(url)`` so the
+    request carries a browser user-agent and so the raw response is available to
+    diagnose with -- feedparser reports a block page as a generic XML syntax
+    error, which sends you off replacing URLs that were never broken.
+    """
+    from urllib.request import Request, urlopen
+
+    request = Request(
+        url,
+        headers={
+            "User-Agent": agent,
+            "Accept": FEED_ACCEPT,
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+    )
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            body = response.read()
+            content_type = response.headers.get("Content-Type", "")
+    except Exception as exc:  # DNS, TLS, timeout, HTTP error — all non-fatal
+        return None, f"fetch failed: {exc}"
+
+    # Imported only once there are bytes worth parsing, which keeps the pure
+    # logic here testable without the dependency installed.
+    import feedparser
+
+    parsed = feedparser.parse(body)
+    if parsed.entries:
+        return parsed, None
+    if _looks_like_html(body, content_type):
+        return parsed, (
+            "server returned an HTML page, not a feed — the URL has moved, or "
+            "this publisher is blocking automated requests"
+        )
+    if getattr(parsed, "bozo", False):
+        return parsed, f"unreadable feed ({getattr(parsed, 'bozo_exception', '')})"
+    return parsed, "parsed as a feed but contains no entries"
+
+
 def fetch_feeds(sources: dict[str, Any], lookback_hours: int = 36) -> list[Story]:
     """Pull every configured RSS/Atom feed. A broken feed is logged and skipped,
     never fatal — one dead local paper must not stop the show."""
-    import feedparser  # imported here so pure logic stays testable without it
-
     keywords: dict[str, float] = sources.get("keywords", {}) or {}
     stories: list[Story] = []
 
@@ -184,13 +255,9 @@ def fetch_feeds(sources: dict[str, Any], lookback_hours: int = 36) -> list[Story
             continue
         name = feed.get("name", url)
         weight = float(feed.get("weight", 1.0))
-        try:
-            parsed = feedparser.parse(url)
-        except Exception as exc:  # network, XML, encoding — all non-fatal
-            print(f"  ! {name}: {exc}")
-            continue
-        if getattr(parsed, "bozo", False) and not parsed.entries:
-            print(f"  ! {name}: unreadable feed ({getattr(parsed, 'bozo_exception', '')})")
+        parsed, error = fetch_feed(url)
+        if error is not None:
+            print(f"  ! {name}: {error}")
             continue
 
         count = 0

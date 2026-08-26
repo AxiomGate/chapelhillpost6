@@ -1,5 +1,7 @@
 from podcastpipe.models import Story
 from podcastpipe.stages.research import (
+    FEED_AGENT,
+    _looks_like_html,
     dedupe_stories,
     is_recent,
     normalize_url,
@@ -124,3 +126,47 @@ class TestRecency:
 
     def test_rfc2822_parsed(self):
         assert not is_recent("Wed, 01 Jan 2020 00:00:00 +0000", 24)
+
+
+class TestFeedFetching:
+    """A blocked request and a malformed feed look identical to the XML parser.
+
+    Telling them apart is the whole point of fetching the bytes ourselves:
+    "unreadable feed" sent a week of work into replacing Military.com and Stars
+    and Stripes URLs that were never broken, when the servers were answering a
+    non-browser user-agent with a challenge page.
+    """
+
+    def test_html_block_page_detected_by_content_type(self):
+        assert _looks_like_html(b"whatever", "text/html; charset=utf-8")
+
+    def test_html_block_page_detected_by_body(self):
+        assert _looks_like_html(b"\n  <!DOCTYPE html><html>", "")
+        assert _looks_like_html(b"<html><head>", "application/octet-stream")
+
+    def test_real_feed_is_not_html(self):
+        assert not _looks_like_html(b"<?xml version='1.0'?><rss>", "application/rss+xml")
+
+    def test_xml_served_as_html_content_type_is_still_flagged(self):
+        # Publishers that block bots frequently answer with text/html even when
+        # the body is empty; flagging on either signal is deliberate.
+        assert _looks_like_html(b"", "text/html")
+
+    def test_browser_user_agent_is_sent(self):
+        # The default feedparser agent is what gets blocked. If this ever
+        # regresses to something identifying as a bot, the feeds go quiet again
+        # and the only symptom is a shorter brief.
+        assert "Mozilla/5.0" in FEED_AGENT
+        assert "feedparser" not in FEED_AGENT.lower()
+
+    def test_fetch_failure_is_reported_not_raised(self, monkeypatch):
+        # One dead feed must never stop the show.
+        import podcastpipe.stages.research as research
+
+        def boom(*args, **kwargs):
+            raise OSError("connection refused")
+
+        monkeypatch.setattr("urllib.request.urlopen", boom)
+        parsed, error = research.fetch_feed("https://example.com/feed")
+        assert parsed is None
+        assert "connection refused" in error
