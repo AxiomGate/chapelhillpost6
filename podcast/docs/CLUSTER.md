@@ -358,6 +358,53 @@ more per-render warm-up. Check the bottleneck first — with voice on one card a
 
 ## Operations
 
+### Shipping a change
+
+Node-a is the only machine that pulls. The other two read the same checkout over
+NFS, so a pull on node-a updates all three.
+
+**On node-a:**
+
+```bash
+cd /mnt/user/podcast/repo && \
+git fetch origin claude/podcast-video-pipeline-0rs4ns && \
+git reset --hard origin/claude/podcast-video-pipeline-0rs4ns && \
+git log --oneline -1
+./podcast/scripts/deploy-config.sh
+docker restart podcast-orchestrator
+```
+
+Then restart whichever workers you touched. That is the whole procedure, and it
+covers three things that used to be silent no-ops:
+
+**Python code** is bind-mounted from the checkout into every container, over the
+copy baked in at build time. Before that mount existed, `COPY src/ ./src/` meant
+a container ran whatever the source looked like at its last build — pulling
+changed the checkout and changed nothing that executed, with no error, because
+the stale code was still perfectly valid code. A rebuild is only needed when
+`pyproject.toml` changes, since dependencies and entry points are installed
+rather than imported.
+
+**Client configuration** lives at `/mnt/user/podcast/clients/<name>/`, not in the
+checkout. `PODCASTPIPE_CONFIG=/pipeline/config/show.yaml` makes `/mnt/user/podcast`
+the config root, so the repo's `clients/` directory is never read by anything.
+`deploy-config.sh` copies the YAML across; it backs up whatever it overwrites,
+never touches `assets/`, and leaves the share's own `config/show.yaml` alone.
+The split is deliberate — `assets/` holds the voice reference and the base loop,
+which belong on the share and not in git.
+
+**Both failures look like being ignored rather than like an error.** A host name
+edit and a set of feed URL fixes were each lost this way, and both times the
+apparent symptom was that the code had disregarded the change.
+
+Confirm the code actually landed:
+
+```bash
+docker exec podcast-orchestrator podcastpipe --help
+```
+
+New subcommands showing up there is the cheapest proof the mount is live.
+
 **Restarting a worker** costs one model load (60–90 s) and nothing else. Jobs in
 flight fail, get retried on another node if one exists, and the episode
 continues.

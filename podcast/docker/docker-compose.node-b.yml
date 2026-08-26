@@ -73,6 +73,14 @@ services:
       TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD: "1"
       PORT: "8081"
     volumes:
+      # Worker source from the checkout rather than the copy baked in at build
+      # time. This matters most here: the avatar image is 8.7 GB and pinned to a
+      # version set that took several failed attempts to land, so "rebuild to
+      # ship a one-line fix" is a genuinely risky operation. With this mount,
+      # avatar_worker.py changes need only `git pull` on node-a and a restart.
+      #
+      # Read-only, so the container can never dirty the checkout.
+      - /mnt/remotes/podcast/repo/podcast/cluster:/opt/worker:ro
       - /mnt/remotes/podcast:/pipeline
       # Node-local NVMe. Driving video lives here so it never crosses the
       # network. Must be a cache pool, not the parity array.
@@ -109,6 +117,9 @@ services:
       WHISPER_COMPUTE: "int8_float16"
       PORT: "8082"
     volumes:
+      # Worker source from the checkout, not the baked copy -- `git pull` on
+      # node-a plus a restart ships a change here.
+      - /mnt/remotes/podcast/repo/podcast/cluster:/opt/worker:ro
       - /mnt/remotes/podcast:/pipeline
       - /mnt/cache/podcast-scratch-media:/scratch
       # ~3 GB of Whisper weights, downloaded on first start. node-c holds its

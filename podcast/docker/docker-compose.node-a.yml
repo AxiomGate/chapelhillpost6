@@ -54,6 +54,10 @@ services:
       - /mnt/user/podcast:/pipeline
       - /mnt/cache/podcast-scratch:/scratch
       - /mnt/user/appdata/podcast/chatterbox-models:/root/.cache/huggingface
+      # Worker source from the checkout rather than the copy baked in at build
+      # time, so a worker fix ships with `git pull` + `docker restart` instead of
+      # a rebuild. See the note on the orchestrator's mount below.
+      - /mnt/user/podcast/repo/podcast/cluster:/opt/worker:ro
     healthcheck:
       # python3.11, not python. These images install python3.11 with no `python`
       # symlink, so a `python` healthcheck fails on a container that is fine.
@@ -89,6 +93,21 @@ services:
       TZ: "America/New_York"
     volumes:
       - /mnt/user/podcast:/pipeline
+      # The repo checkout, overlaying the copy baked into the image.
+      #
+      # Dockerfile.orchestrator does `COPY src/ ./src/` then `pip install -e`,
+      # so without this the container runs whatever the source looked like at
+      # its last build. Pulling on the share changed the checkout and changed
+      # nothing the container executes -- code fixes appeared to have no effect,
+      # repeatedly, with no error to explain why. Mounting the checkout over the
+      # baked copy makes `git pull` + `docker restart` the whole deployment.
+      #
+      # Read-only: the container must never write to the checkout, or the next
+      # `git reset --hard` becomes a merge conflict.
+      #
+      # A rebuild is still needed when pyproject.toml changes -- new
+      # dependencies and new entry points are installed, not imported.
+      - /mnt/user/podcast/repo/podcast/src:/opt/podcastpipe/src:ro
     # Only the local worker. The avatar and media workers live on node-b and
     # node-c; the orchestrator reaches them over HTTP and health-checks them at
     # the start of a run, so there is nothing to depend on here.
