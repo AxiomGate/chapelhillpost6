@@ -14,7 +14,7 @@ from pathlib import Path
 
 from ..config import Config
 from ..llm import LlmClient
-from ..models import Block, Brief, Script, Segment
+from ..models import WORDS_PER_MINUTE, Block, Brief, Script, Segment
 
 SYSTEM_PROMPT = """You write scripts for a daily local news podcast that is also
 published as video. You are writing words a human will speak aloud, not prose to
@@ -33,6 +33,20 @@ Craft rules:
   keep the uncertainty in the script.
 - No stage directions, no speaker labels, no markdown, no emoji. Just the words
   to be spoken.
+
+Length is a hard requirement, not a suggestion:
+- Every segment carries a word budget. Hit it. A segment that lands under its
+  budget is the single most common failure here, and it is not a stylistic
+  choice -- it produces an episode that ends early with airtime left over.
+- Write to the budget by going deeper, never by padding. Depth means: what
+  actually changed, who it applies to, what the eligibility or deadline is, what
+  a listener should do about it, what is still unresolved, and what the counter
+  argument or the caveat is. All of that is in the source material and most of it
+  does not survive a first pass.
+- If the material for a segment feels thin, that usually means the obvious facts
+  were stated and the consequences were not. Say what it means for someone it
+  applies to.
+- Do not announce the budget, the runtime, or the structure on air.
 
 For each block, supply a visual cue the video pipeline can render:
 - {"type": "lower_third", "text": "..."} for a name/topic strap
@@ -64,11 +78,23 @@ def build_prompt(config: Config, brief: Brief) -> str:
         {"id": "outro", "name": "Outro", "target_seconds": 45},
     ]
 
+    # Seconds are what the show is designed in; words are what the model can
+    # actually aim at. Asking for "~240s" and hoping produced a script that ran
+    # 8.5 minutes against a 15 minute target -- the model has no reliable way to
+    # convert one to the other, so the conversion happens here.
+    def words_for(seconds: float) -> int:
+        return int(round(seconds / 60 * WORDS_PER_MINUTE / 10) * 10)
+
     segment_spec = "\n".join(
-        f"- id: {s['id']} | {s.get('name', s['id'])} | target ~{s.get('target_seconds', 120)}s"
+        f"- id: {s['id']} | {s.get('name', s['id'])} | "
+        f"~{s.get('target_seconds', 120)}s = write about "
+        f"{words_for(float(s.get('target_seconds', 120)))} words"
         + (f" | {s['instructions']}" if s.get("instructions") else "")
         for s in segments
     )
+
+    total_seconds = sum(float(s.get("target_seconds", 120)) for s in segments)
+    total_words = words_for(total_seconds)
 
     story_block = "\n\n".join(
         f"[{i}] {s.title}\n    url: {s.url}\n    source: {s.source}\n    summary: {s.summary}"
@@ -84,12 +110,14 @@ def build_prompt(config: Config, brief: Brief) -> str:
 Host: {config.show.host}
 Tagline: {config.show.tagline}
 Episode date: {brief.episode_id}
-Target runtime: {config.show.target_minutes} minutes (about {config.show.target_minutes * 150} words)
+Target runtime: {config.show.target_minutes} minutes.
+Total script length: about {total_words} words across all segments. This is the
+number to hit. Coming in short is the failure mode to avoid.
 
 Style guide:
 {config.show.style_guide or '(none specified)'}
 
-Segments to write, in order:
+Segments to write, in order (each with its own word budget):
 {segment_spec}
 
 Day's headline: {brief.headline}

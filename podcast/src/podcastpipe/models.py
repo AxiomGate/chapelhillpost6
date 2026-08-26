@@ -14,6 +14,12 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable
 
+# Measured pace for a conversational news read. Used in two places that must
+# agree: the runtime estimate reported after a script is written, and the word
+# budgets handed to the model when writing one. If those two drift apart, the
+# script is told to hit a length that is then judged against a different scale.
+WORDS_PER_MINUTE = 150
+
 EpisodeStatus = str  # new | researched | scripted | approved | rendered | published
 
 
@@ -116,9 +122,8 @@ class Script:
     def word_count(self) -> int:
         return sum(s.word_count() for s in self.segments)
 
-    def estimated_minutes(self, words_per_minute: int = 150) -> float:
-        """Rough runtime estimate. 150 wpm is a typical measured pace for a
-        conversational news read; the real number comes from the TTS output."""
+    def estimated_minutes(self, words_per_minute: int = WORDS_PER_MINUTE) -> float:
+        """Rough runtime estimate. The real number comes from the TTS output."""
         return self.word_count() / max(words_per_minute, 1)
 
     def full_text(self) -> str:

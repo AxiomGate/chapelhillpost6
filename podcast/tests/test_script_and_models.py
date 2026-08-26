@@ -214,3 +214,73 @@ class TestScriptMetrics:
             segments=[Segment(id="s", name="S", blocks=[Block(id="s-1", text="word " * 300)])],
         )
         assert script.estimated_minutes(150) == pytest.approx(2.0)
+
+
+class TestWordBudgets:
+    """The prompt must state segment lengths in words, not only in seconds.
+
+    Asking for "~240s" and hoping produced a 1282-word script against a 15
+    minute target -- 8.5 minutes, with airtime left over. The model cannot
+    convert seconds to words reliably, so build_prompt does it.
+    """
+
+    def _config(self, tmp_path, segments):
+        from podcastpipe.config import Config, ShowConfig
+
+        config = object.__new__(Config)
+        config.show = object.__new__(ShowConfig)
+        config.show.name = "Test Show"
+        config.show.host = "Host"
+        config.show.tagline = "Tagline"
+        config.show.target_minutes = 15
+        config.show.style_guide = ""
+        config.show.segments = segments
+        return config
+
+    def _brief(self):
+        from podcastpipe.models import Brief
+
+        return Brief(
+            episode_id="2026-08-26",
+            generated_at="2026-08-26T00:00:00Z",
+            headline="H",
+            notes="N",
+        )
+
+    def test_each_segment_states_a_word_budget(self, tmp_path):
+        from podcastpipe.stages.script import build_prompt
+
+        config = self._config(
+            tmp_path,
+            [
+                {"id": "cold_open", "name": "Cold Open", "target_seconds": 20},
+                {"id": "deep_dive", "name": "The Long Look", "target_seconds": 400},
+            ],
+        )
+        prompt = build_prompt(config, self._brief())
+        # 20s at 150 wpm is 50 words; 400s is 1000.
+        assert "write about 50 words" in prompt
+        assert "write about 1000 words" in prompt
+
+    def test_total_is_the_sum_of_the_segments(self, tmp_path):
+        from podcastpipe.stages.script import build_prompt
+
+        config = self._config(
+            tmp_path,
+            [
+                {"id": "a", "target_seconds": 240},
+                {"id": "b", "target_seconds": 400},
+                {"id": "c", "target_seconds": 200},
+            ],
+        )
+        prompt = build_prompt(config, self._brief())
+        assert "about 2100 words" in prompt
+
+    def test_budget_and_runtime_estimate_use_the_same_rate(self):
+        # If these drift, the script is told to hit one length and then judged
+        # against another, and the "short" warning fires on a correct script.
+        from podcastpipe.models import WORDS_PER_MINUTE, Script
+
+        script = object.__new__(Script)
+        script.segments = []
+        assert Script.estimated_minutes.__defaults__ == (WORDS_PER_MINUTE,)
