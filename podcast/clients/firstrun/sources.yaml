@@ -22,12 +22,14 @@ feeds:
   - name: "VA News"
     url: "https://news.va.gov/feed/"
     weight: 1.3
-  - name: "Military.com Benefits"
-    url: "https://www.military.com/rss/benefits"
+  # Military.com retired its per-category feeds -- /rss/benefits and /rss/news
+  # both 404, and their own RSS page now advertises exactly one feed for the
+  # whole site. So this is broader than the two entries it replaces, and the
+  # keyword weights below are what pull the benefits and legislation stories out
+  # of it.
+  - name: "Military.com"
+    url: "https://www.military.com/feed/"
     weight: 1.2
-  - name: "Military.com News"
-    url: "https://www.military.com/rss/news"
-    weight: 1.1
 
   # --- Service and Pentagon reporting ------------------------------------
   - name: "Military Times"
@@ -57,13 +59,19 @@ feeds:
   - name: "The War Horse"
     url: "https://thewarhorse.org/feed/"
     weight: 1.2
-  # VA OIG publishes its feeds under va.gov/oig, not the vaoig.gov vanity domain.
-  # This URL is a best guess at the reports feed on that host and has not been
-  # confirmed from a machine that can reach it -- run `podcastpipe --client
-  # firstrun feeds` and fix or delete this entry based on what it says.
-  - name: "VA Office of Inspector General"
-    url: "https://www.va.gov/oig/rss/reports.xml"
-    weight: 1.2
+  # VA Office of Inspector General — DISABLED, no working URL found yet.
+  #
+  # vaoig.gov/rss/reports.xml and va.gov/oig/rss/reports.xml both 404, and
+  # va.gov/oig/rss/ answers 200 with no feed links in it at all. Guessing a
+  # third URL has cost two rounds already, so this stays off until one is
+  # confirmed by fetching it rather than by reasoning about it.
+  #
+  # Worth restoring when found: OIG reports are low-volume and are where the
+  # deep-dive stories actually come from. Their absence is why The Long Look is
+  # currently drawn from the same news feeds as The Rundown.
+  # - name: "VA Office of Inspector General"
+  #   url: "?"
+  #   weight: 1.2
 
 # Keyword weights drive relevance scoring. A hit in the headline counts double a
 # hit in the body, so a term in a headline strongly implies the story is about it.
