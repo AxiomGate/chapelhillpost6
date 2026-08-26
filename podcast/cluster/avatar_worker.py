@@ -23,6 +23,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import tempfile
 import time
 from pathlib import Path
@@ -245,6 +246,59 @@ def _windows_of(job: dict) -> list[dict]:
     }]
 
 
+def _publish_window(
+    window: dict, duration: float, index: int, candidates: list[Path], fps: int
+) -> dict | None:
+    """Copy one finished MuseTalk output onto the share.
+
+    Returns None when this window's output is not in ``candidates`` yet, which
+    during a batch simply means MuseTalk has not reached it.
+    """
+    stem = Path(window["audio"]).stem
+    # Match on the audio stem rather than position: MuseTalk does not promise an
+    # output order, and picking by index would silently pair a window with
+    # another window's video.
+    matches = [p for p in candidates if stem in p.name]
+    if not matches:
+        matches = [p for p in candidates if f"driving_{index:03d}" in p.name]
+    if not matches:
+        return None
+
+    best = max(matches, key=lambda p: p.stat().st_size)
+    out_path = Path(window["out_path"])
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    # Copy then replace: the destination is on the network share, and a partial
+    # file there would be picked up as a finished window.
+    staging = out_path.with_suffix(".partial.mp4")
+    shutil.copy2(best, staging)
+    staging.replace(out_path)
+
+    # MuseTalk can exit 0 having written almost nothing -- one window came back
+    # with 38 frames where 1500 were due, and the worker accepted it because the
+    # file existed. That shipped a frozen minute into a finished episode with no
+    # error anywhere.
+    expected = int(duration * fps)
+    frames = _probe_frames(out_path)
+    if 0 <= frames < expected * 0.9:
+        # Remove it, or the orchestrator's content-hash cache treats this window
+        # as rendered and the retry never happens.
+        out_path.unlink(missing_ok=True)
+        return {
+            "ok": False,
+            "error": (
+                f"only {frames} frames for a {duration:.1f}s window "
+                f"needing about {expected}"
+            ),
+        }
+
+    return {
+        "ok": True,
+        "out_path": str(out_path),
+        "duration": round(duration, 3),
+        "frames": frames if frames >= 0 else expected,
+    }
+
+
 def handle(model, job: dict) -> dict:
     """Render one or more windows in a single MuseTalk invocation.
 
@@ -317,6 +371,65 @@ def handle(model, job: dict) -> dict:
 
         results = workdir / "results"
         render_started = time.monotonic()
+
+        # Windows are published to the share as MuseTalk finishes them, not all
+        # at the end. Two things come from that.
+        #
+        # A batch that dies partway no longer throws away the windows it had
+        # already rendered -- they are on the share, the orchestrator's cache is
+        # keyed by content, and the retry skips them. A failure at window five of
+        # six used to discard twenty-five minutes of finished GPU work.
+        #
+        # And the render stops being invisible. Collecting only at the end meant
+        # nothing appeared anywhere for half an hour, so a healthy batch and a
+        # hung one looked identical from outside this process.
+        published: dict[int, dict] = {}
+        seen_sizes: dict[Path, int] = {}
+        publish_lock = threading.Lock()
+
+        def collect(final: bool) -> list[Path]:
+            """Publish whatever is finished. Returns the candidate files seen."""
+            candidates = sorted(results.rglob("*.mp4"))
+            ready: list[Path] = []
+            for path in candidates:
+                try:
+                    size = path.stat().st_size
+                except OSError:
+                    continue
+                # Mid-render, only take a file whose size held steady across two
+                # polls. MuseTalk writes the moov atom last, so a file caught
+                # mid-write probes as having no frames at all -- which the frame
+                # check reads as "MuseTalk produced garbage" and deletes.
+                if final or (size > 0 and seen_sizes.get(path) == size):
+                    ready.append(path)
+                seen_sizes[path] = size
+
+            with publish_lock:
+                for index, (window, duration) in enumerate(zip(windows, durations)):
+                    if index in published:
+                        continue
+                    outcome = _publish_window(window, duration, index, ready, fps)
+                    if outcome is None:
+                        continue
+                    # Mid-render, record successes only. A failure verdict is
+                    # left to the final pass, which sees the finished file.
+                    if outcome["ok"] or final:
+                        published[index] = outcome
+            return candidates
+
+        stop_collect = threading.Event()
+
+        def watch() -> None:
+            while not stop_collect.wait(15.0):
+                try:
+                    collect(final=False)
+                except Exception:
+                    # Best-effort progress must never be able to fail a render.
+                    pass
+
+        collector = threading.Thread(target=watch, daemon=True)
+        collector.start()
+
         _run(
             [sys.executable, "-m", "scripts.inference",
              "--inference_config", str(config),
@@ -340,63 +453,21 @@ def handle(model, job: dict) -> dict:
              "--use_float16"],
             cwd=MUSETALK_HOME,
         )
+        stop_collect.set()
         render_seconds = time.monotonic() - render_started
 
-        produced = sorted(results.rglob("*.mp4"))
+        produced = collect(final=True)
         if not produced:
             raise RuntimeError(
                 f"MuseTalk produced no output for any of {len(windows)} window(s)"
             )
 
-        for index, (window, duration) in enumerate(zip(windows, durations)):
-            out_path = Path(window["out_path"])
+        for index, window in enumerate(windows):
             stem = Path(window["audio"]).stem
-            # Match on the audio stem rather than position: MuseTalk does not
-            # promise an output order, and picking by index would silently pair
-            # a window with another window's video.
-            matches = [p for p in produced if stem in p.name]
-            if not matches:
-                matches = [p for p in produced if f"driving_{index:03d}" in p.name]
-            if not matches:
-                results_by_stem[window.get("id", stem)] = {
-                    "ok": False,
-                    "error": f"no MuseTalk output matched window {stem}",
-                }
-                continue
-
-            best = max(matches, key=lambda p: p.stat().st_size)
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            # Copy then replace: the destination is on the network share, and a
-            # partial file there would be picked up as a finished window.
-            staging = out_path.with_suffix(".partial.mp4")
-            shutil.copy2(best, staging)
-            staging.replace(out_path)
-
-            # MuseTalk can exit 0 having written almost nothing -- one window
-            # came back with 38 frames where 1500 were due, and the worker
-            # accepted it because the file existed. That shipped a frozen minute
-            # into a finished episode with no error anywhere.
-            expected = int(duration * fps)
-            frames = _probe_frames(out_path)
-            if 0 <= frames < expected * 0.9:
-                # Remove it, or the orchestrator's content-hash cache treats
-                # this window as rendered and the retry never happens.
-                out_path.unlink(missing_ok=True)
-                results_by_stem[window.get("id", stem)] = {
-                    "ok": False,
-                    "error": (
-                        f"only {frames} frames for a {duration:.1f}s window "
-                        f"needing about {expected}"
-                    ),
-                }
-                continue
-
-            results_by_stem[window.get("id", stem)] = {
-                "ok": True,
-                "out_path": str(out_path),
-                "duration": round(duration, 3),
-                "frames": frames if frames >= 0 else expected,
-            }
+            results_by_stem[window.get("id", stem)] = published.get(
+                index,
+                {"ok": False, "error": f"no MuseTalk output matched window {stem}"},
+            )
 
     failed = {k: v["error"] for k, v in results_by_stem.items() if not v["ok"]}
     if failed:
