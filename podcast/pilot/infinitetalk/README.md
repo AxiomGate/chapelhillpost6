@@ -7,38 +7,57 @@ references this directory, `cluster.yaml` does not know it exists, and the
 production `podcast-avatar` containers on node-b and node-c are untouched by
 any of this. Safe to run, safe to delete afterward if it doesn't pan out.
 
-## Where to run this
+## Where this runs: amdtower
 
-Any machine with a free RTX 3090 that is **not currently serving a live
-episode render**. The new (4th) 3090 is the obvious choice if it's reachable
-and idle -- otherwise node-b or node-c between episodes, but never while
-`podcast-avatar` is mid-render on that box: this pilot and the production
-container would fight over the same 24GB.
+`amdtower` -- Unraid 7.3, Ryzen 9 9950X, RTX 3090, Tailscale `100.77.255.110`.
+Not a cluster member: it has no NFS mount of the podcast share and isn't in
+`cluster.yaml`. That's deliberate for a one-shot pilot -- it only needs two
+small files (one audio chunk, the base loop video), so this copies them
+directly with `scp` rather than exporting the share to a fourth machine before
+knowing whether this model is even the right call.
 
-Everything below assumes you're on that machine, in the repo checkout
-(`/mnt/user/podcast/repo` on node-a, `/mnt/remotes/podcast/repo` on node-b/c).
+Node-a is reachable from amdtower over Tailscale at `100.73.169.24`.
 
-## 1. Check free disk space before downloading anything
+## 0. On amdtower — clone the repo
+
+```bash
+mkdir -p /mnt/user/infinitetalk-pilot
+cd /mnt/user/infinitetalk-pilot
+git clone https://github.com/AxiomGate/chapelhillpost6.git repo
+cd repo
+git checkout claude/podcast-video-pipeline-0rs4ns
+```
+
+## 1. On amdtower — confirm the GPU actually reaches a container
+
+`nvidia-smi` working on the host (already confirmed) is not the same thing as
+Docker being able to pass the GPU into a container. Cheap to check before
+downloading tens of GB on the strength of an assumption:
+
+```bash
+docker run --rm --gpus all nvidia/cuda:12.1.1-base-ubuntu22.04 nvidia-smi
+```
+
+If that doesn't print the 3090, stop here and paste me the error -- on Unraid
+this usually means the Nvidia-Driver plugin needs enabling or Docker needs a
+restart after it, not a real hardware problem.
+
+## 2. On amdtower — check free disk space
 
 The weights are large: Wan2.1-I2V-14B-480P is a 14B-parameter model (tens of
 GB at fp16), plus the wav2vec audio encoder and InfiniteTalk's own conditioning
-weights on top. Budget **50GB+ free** on whatever local disk you point the
-download at. Check first:
+weights on top. Budget **50GB+ free**:
 
 ```bash
-df -h /mnt/cache    # or wherever you're about to point --local-dir below
+df -h /mnt/user
 ```
 
-## 2. Fetch the weights, once, to node-local storage
-
-Not the NFS share -- same reason MuseTalk's weights live at
-`/mnt/user/appdata/podcast/musetalk-models` per node instead of on `/pipeline`:
-a render should never wait on NFS to page in a multi-GB model.
+## 3. On amdtower — fetch the weights, once
 
 ```bash
 pip install -U "huggingface_hub[cli]"
 
-WEIGHTS=/mnt/user/appdata/podcast/infinitetalk-pilot-models   # adjust per node
+WEIGHTS=/mnt/user/infinitetalk-pilot/weights
 mkdir -p "$WEIGHTS"
 
 huggingface-cli download Wan-AI/Wan2.1-I2V-14B-480P \
@@ -49,11 +68,36 @@ huggingface-cli download MeiGen-AI/InfiniteTalk \
     --local-dir "$WEIGHTS/InfiniteTalk"
 ```
 
-## 3. Build the pilot image
+This step is the long pole -- let it run, it doesn't need attention.
 
-From the repo root (`podcast/`):
+## 4. On node-a — copy one real chunk to amdtower
+
+Use a chunk from an episode that's already been through MuseTalk, so the
+comparison is apples-to-apples: same audio, same base loop, watch both back
+to back afterward.
 
 ```bash
+mkdir -p /tmp/pilot-input
+ffmpeg -y -i /mnt/user/podcast/output/firstrun/archive/2026-08-26_20260826-212251_published/master_podcast_2122.wav \
+    -ss 0 -t 60 -c copy /tmp/pilot-input/chunk_60s.wav
+cp /mnt/user/podcast/clients/firstrun/assets/avatar/base_loop.mp4 \
+   /tmp/pilot-input/base_loop.mp4
+
+scp /tmp/pilot-input/chunk_60s.wav /tmp/pilot-input/base_loop.mp4 \
+    root@100.77.255.110:/mnt/user/infinitetalk-pilot/input/
+```
+
+(That's the finished episode from the most recent successful run. Path to
+`base_loop.mp4` may differ -- check `clients/firstrun/show.yaml`'s
+`avatar.base_loop` if that `cp` fails.)
+
+`scp` will prompt for amdtower's root password the first time; say yes to the
+host key prompt.
+
+## 5. On amdtower — build the pilot image
+
+```bash
+cd /mnt/user/infinitetalk-pilot/repo/podcast
 docker build -f pilot/infinitetalk/Dockerfile -t infinitetalk-pilot .
 ```
 
@@ -67,36 +111,15 @@ and paste me the error rather than let it grind -- there is very likely a
 prebuilt wheel for this exact torch 2.4.1 + cu121 + Python 3.10 combination
 that avoids the compile entirely, but which one depends on the actual failure.
 
-## 4. Grab one real chunk to render
-
-Use a chunk from an episode that's already been through MuseTalk, so the
-comparison is apples-to-apples: same audio, same base loop, and you can watch
-both outputs back to back.
-
-On node-a, pull one 60-second slice from an archived episode's master audio
-and copy the base loop over:
+## 6. On amdtower — run it
 
 ```bash
-mkdir -p /mnt/user/podcast/pilot-input
-ffmpeg -y -i /mnt/user/podcast/output/firstrun/archive/<pick-a-run>/master_podcast_*.wav \
-    -ss 0 -t 60 -c copy /mnt/user/podcast/pilot-input/chunk_60s.wav
-cp /mnt/user/podcast/clients/firstrun/assets/avatar/base_loop.mp4 \
-   /mnt/user/podcast/pilot-input/base_loop.mp4
-```
+mkdir -p /mnt/user/infinitetalk-pilot/output
 
-(Path to `base_loop.mp4` may differ -- check
-`clients/firstrun/show.yaml`'s `avatar.base_loop` if that doesn't exist.)
-
-If you're running the pilot on node-b or node-c, that's already on
-`/mnt/remotes/podcast/pilot-input/` over NFS.
-
-## 5. Run it
-
-```bash
 docker run --rm --gpus all \
     -v "$WEIGHTS:/weights:ro" \
-    -v /mnt/user/podcast/pilot-input:/in:ro \
-    -v /mnt/user/podcast/pilot-input:/out \
+    -v /mnt/user/infinitetalk-pilot/input:/in:ro \
+    -v /mnt/user/infinitetalk-pilot/output:/out \
     infinitetalk-pilot \
     python3.10 run_pilot.py \
         --base-loop /in/base_loop.mp4 \
@@ -106,9 +129,6 @@ docker run --rm --gpus all \
         --wav2vec-dir /weights/chinese-wav2vec2-base \
         --infinitetalk-dir /weights/InfiniteTalk/single/infinitetalk.safetensors
 ```
-
-(Adjust the two `-v` mount sources to wherever step 4 actually put the files
-on this machine.)
 
 This prints a job config, runs the render, and ends with:
 
@@ -135,14 +155,16 @@ then re-run pointing `--infinitetalk-dir` at
 adding `--quant fp8 --quant_dir <same path>` to the command inside
 `run_pilot.py` (not yet wired as a flag here -- add it if you hit this).
 
-## 6. Judge it
+## 7. Judge it
 
-Copy `infinitetalk_pilot.mp4` local before watching it -- SMB-over-Tailscale
-stutters even on small files, and that cost a whole debugging round earlier in
-this project for a completely unrelated reason. Copy it to your desktop over
-the `podcast` share, not a network stream.
+`infinitetalk_pilot.mp4` lands at `/mnt/user/infinitetalk-pilot/output/` on
+amdtower. Copy it to your desktop over amdtower's own share before watching --
+SMB-over-Tailscale stutters even on small files, and that cost a whole
+debugging round earlier in this project for a completely unrelated reason.
 
-Watch it next to the MuseTalk output for the same chunk. Report back:
+Watch it next to the MuseTalk output for the same chunk (the archive folder
+copied from in step 4 also has `avatar_2122.mp4`, the silent MuseTalk render
+for comparison). Report back:
 
 - the `fps_effective` number
 - whether it needed `--low-vram` / fp8 to fit, or ran clean
