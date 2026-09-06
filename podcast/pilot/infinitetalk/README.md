@@ -54,18 +54,20 @@ df -h /mnt/user
 
 ## 3. On amdtower — fetch the weights, once
 
-```bash
-pip install -U "huggingface_hub[cli]"
+Unraid's host OS has no Python or pip by default -- deliberately minimal, same
+as every other Unraid box in this project. Everything here runs in a
+throwaway container instead, matching how the rest of the pipeline works:
 
+```bash
 WEIGHTS=/mnt/user/infinitetalk-pilot/weights
 mkdir -p "$WEIGHTS"
 
-huggingface-cli download Wan-AI/Wan2.1-I2V-14B-480P \
-    --local-dir "$WEIGHTS/Wan2.1-I2V-14B-480P"
-huggingface-cli download TencentGameMate/chinese-wav2vec2-base \
-    --local-dir "$WEIGHTS/chinese-wav2vec2-base"
-huggingface-cli download MeiGen-AI/InfiniteTalk \
-    --local-dir "$WEIGHTS/InfiniteTalk"
+docker run --rm -v "$WEIGHTS:/weights" python:3.10-slim sh -c "
+    pip install -q -U 'huggingface_hub[cli]' &&
+    huggingface-cli download Wan-AI/Wan2.1-I2V-14B-480P --local-dir /weights/Wan2.1-I2V-14B-480P &&
+    huggingface-cli download TencentGameMate/chinese-wav2vec2-base --local-dir /weights/chinese-wav2vec2-base &&
+    huggingface-cli download MeiGen-AI/InfiniteTalk --local-dir /weights/InfiniteTalk
+"
 ```
 
 This step is the long pole -- let it run, it doesn't need attention.
