@@ -62,13 +62,26 @@ throwaway container instead, matching how the rest of the pipeline works:
 WEIGHTS=/mnt/user/infinitetalk-pilot/weights
 mkdir -p "$WEIGHTS"
 
-docker run --rm -v "$WEIGHTS:/weights" python:3.10-slim sh -c "
-    pip install -q -U 'huggingface_hub[cli]' &&
-    huggingface-cli download Wan-AI/Wan2.1-I2V-14B-480P --local-dir /weights/Wan2.1-I2V-14B-480P &&
-    huggingface-cli download TencentGameMate/chinese-wav2vec2-base --local-dir /weights/chinese-wav2vec2-base &&
-    huggingface-cli download MeiGen-AI/InfiniteTalk --local-dir /weights/InfiniteTalk
+docker run -d --name infinitetalk-weights -v "$WEIGHTS:/weights" python:3.10-slim sh -c "
+    pip install -q -U huggingface_hub &&
+    hf download Wan-AI/Wan2.1-I2V-14B-480P --local-dir /weights/Wan2.1-I2V-14B-480P &&
+    hf download TencentGameMate/chinese-wav2vec2-base --local-dir /weights/chinese-wav2vec2-base &&
+    hf download MeiGen-AI/InfiniteTalk --local-dir /weights/InfiniteTalk
 "
+docker logs -f infinitetalk-weights
 ```
+
+`hf`, not `huggingface-cli` -- newer `huggingface_hub` releases renamed the CLI and dropped
+the `[cli]` install extra. The old command prints a deprecation notice and exits
+without downloading anything, which fails fast with no obvious error, so this
+is worth getting right rather than discovering it after a wasted run.
+
+Named and detached (`-d --name`) rather than `--rm` in the foreground: the
+container keeps running even if this SSH session drops, and `docker logs -f`
+can be reattached at any time without affecting it. Check on it, don't remove
+it, until `docker ps -a --filter name=infinitetalk-weights --format
+'{{.Status}}'` reads `Exited (0)` -- pulling it before confirming success
+throws away the only copy of the error.
 
 This step is the long pole -- let it run, it doesn't need attention.
 
@@ -148,8 +161,10 @@ has already hit once with MuseTalk. `--low-vram` is on by default in
 `run_pilot.py`, so the next step is the fp8-quantized weights:
 
 ```bash
-huggingface-cli download MeiGen-AI/InfiniteTalk \
-    --include "quant_models/*" --local-dir "$WEIGHTS/InfiniteTalk"
+docker run --rm -v "$WEIGHTS:/weights" python:3.10-slim sh -c "
+    pip install -q -U huggingface_hub &&
+    hf download MeiGen-AI/InfiniteTalk --include 'quant_models/*' --local-dir /weights/InfiniteTalk
+"
 ```
 
 then re-run pointing `--infinitetalk-dir` at
