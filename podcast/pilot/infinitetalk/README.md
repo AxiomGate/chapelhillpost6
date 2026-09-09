@@ -35,12 +35,23 @@ Docker being able to pass the GPU into a container. Cheap to check before
 downloading tens of GB on the strength of an assumption:
 
 ```bash
-docker run --rm --gpus all nvidia/cuda:12.1.1-base-ubuntu22.04 nvidia-smi
+docker run --rm --device nvidia.com/gpu=all nvidia/cuda:12.1.1-base-ubuntu22.04 nvidia-smi
 ```
 
-If that doesn't print the 3090, stop here and paste me the error -- on Unraid
-this usually means the Nvidia-Driver plugin needs enabling or Docker needs a
-restart after it, not a real hardware problem.
+`--device nvidia.com/gpu=all`, not `--gpus all` -- on this box, plain `--gpus
+all` failed with "AMD CDI spec not found" despite an NVIDIA-only GPU, because
+Docker's default GPU-vendor resolution guessed wrong. The toolkit and the real
+CDI spec (`/etc/cdi/nvidia.yaml`) were both present and correct; naming the
+device explicitly sidesteps whatever picked the wrong vendor.
+
+If that doesn't print the 3090, check whether `nvidia-ctk` exists
+(`which nvidia-ctk`) and whether `/etc/cdi/nvidia.yaml` exists
+(`ls /etc/cdi/`). If both are missing, the Nvidia-Driver plugin needs
+(re)installing from the Unraid web UI. If both are present but this still
+fails, `nvidia-ctk runtime configure --runtime=docker` followed by
+`/etc/rc.d/rc.docker restart` registers the runtime properly -- that was
+enough to fix a Docker GPU integration that survived a full system rebuild
+with the driver intact but nothing wiring it into Docker.
 
 ## 2. On amdtower — check free disk space
 
@@ -68,8 +79,22 @@ docker run -d --name infinitetalk-weights -v "$WEIGHTS:/weights" python:3.10-sli
     hf download TencentGameMate/chinese-wav2vec2-base --local-dir /weights/chinese-wav2vec2-base &&
     hf download MeiGen-AI/InfiniteTalk --local-dir /weights/InfiniteTalk
 "
-docker logs -f infinitetalk-weights
 ```
+
+Check on it with short commands that connect, print, and exit -- not `docker
+logs -f`, which is a long-lived stream that dies the moment a flaky
+connection blips, and on a wireless-only site that's a real risk rather than
+a theoretical one:
+
+```bash
+docker logs --tail 15 infinitetalk-weights
+du -sh /mnt/user/infinitetalk-pilot/weights/* 2>/dev/null
+```
+
+Run that pair whenever you reconnect. **Don't `docker rm` the container until
+`docker ps -a --filter name=infinitetalk-weights --format '{{.Status}}'`
+reads `Exited (0)`** -- removing it before checking the exit status throws
+away the only copy of the error if something went wrong.
 
 `hf`, not `huggingface-cli` -- newer `huggingface_hub` releases renamed the CLI and dropped
 the `[cli]` install extra. The old command prints a deprecation notice and exits
@@ -131,7 +156,7 @@ that avoids the compile entirely, but which one depends on the actual failure.
 ```bash
 mkdir -p /mnt/user/infinitetalk-pilot/output
 
-docker run --rm --gpus all \
+docker run --rm --device nvidia.com/gpu=all \
     -v "$WEIGHTS:/weights:ro" \
     -v /mnt/user/infinitetalk-pilot/input:/in:ro \
     -v /mnt/user/infinitetalk-pilot/output:/out \
