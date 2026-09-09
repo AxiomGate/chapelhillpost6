@@ -55,9 +55,13 @@ with the driver intact but nothing wiring it into Docker.
 
 ## 2. On amdtower — check free disk space
 
-The weights are large: Wan2.1-I2V-14B-480P is a 14B-parameter model (tens of
-GB at fp16), plus the wav2vec audio encoder and InfiniteTalk's own conditioning
-weights on top. Budget **50GB+ free**:
+The weights are large -- larger than a 14B parameter count alone would suggest.
+Measured on a real download: Wan2.1-I2V-14B-480P alone is **~82GB** (it bundles
+a UMT5-XXL text encoder, which is tens of GB by itself, on top of the DiT and
+VAE), InfiniteTalk's own repo is **~74GB** (more than just the lean conditioning
+weights -- it ships both single/multi variants and the quantized models
+alongside), and chinese-wav2vec2-base is a modest ~1.5GB. **Budget 180GB+
+free**, not the 50GB an early estimate here suggested:
 
 ```bash
 df -h /mnt/user
@@ -73,13 +77,25 @@ throwaway container instead, matching how the rest of the pipeline works:
 WEIGHTS=/mnt/user/infinitetalk-pilot/weights
 mkdir -p "$WEIGHTS"
 
-docker run -d --name infinitetalk-weights -v "$WEIGHTS:/weights" python:3.10-slim sh -c "
+docker run -d --name infinitetalk-weights --restart on-failure:10 \
+    -v "$WEIGHTS:/weights" python:3.10-slim sh -c "
     pip install -q -U huggingface_hub &&
     hf download Wan-AI/Wan2.1-I2V-14B-480P --local-dir /weights/Wan2.1-I2V-14B-480P &&
     hf download TencentGameMate/chinese-wav2vec2-base --local-dir /weights/chinese-wav2vec2-base &&
     hf download MeiGen-AI/InfiniteTalk --local-dir /weights/InfiniteTalk
 "
 ```
+
+`--restart on-failure:10` matters on a 150GB+, hours-long download: one run
+died at the 68-minute mark with no OOM, no daemon restart, and no reboot
+anywhere near the time -- nothing in the kernel log at all, which is itself a
+clue, since only OOM kills and hardware events show up there. Something
+sent it a stop signal from outside the kernel's view, and there was no way to
+pin down what. Rather than keep manually noticing it died and restarting by
+hand, Docker now does that automatically -- up to 10 times, only on a
+non-zero exit (a real successful finish still stops it, this isn't
+`unless-stopped`). `hf download` skips files already on disk, so every
+automatic restart resumes rather than starting the 150GB+ over.
 
 Check on it with short commands that connect, print, and exit -- not `docker
 logs -f`, which is a long-lived stream that dies the moment a flaky
@@ -89,9 +105,15 @@ a theoretical one:
 ```bash
 docker logs --tail 15 infinitetalk-weights
 du -sh /mnt/user/infinitetalk-pilot/weights/* 2>/dev/null
+docker inspect infinitetalk-weights --format 'RestartCount={{.RestartCount}}'
 ```
 
-Run that pair whenever you reconnect. **Don't `docker rm` the container until
+`RestartCount` climbing means it keeps dying and Docker keeps bringing it
+back automatically -- worth knowing even though you shouldn't need to act on
+it, since a count that's climbing fast (rather than sitting at 0 or 1) points
+at something worth investigating rather than one-off bad luck.
+
+Run that trio whenever you reconnect. **Don't `docker rm` the container until
 `docker ps -a --filter name=infinitetalk-weights --format '{{.Status}}'`
 reads `Exited (0)`** -- removing it before checking the exit status throws
 away the only copy of the error if something went wrong.
