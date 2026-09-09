@@ -1,8 +1,0 @@
-# Insurance for InfiniteTalk's own requirements.txt, same reason
-# docker/constraints.avatar.txt exists: requirements.txt pins numpy<2 itself,
-# but nothing stops transformers or diffusers being upgraded later in the same
-# build and dragging numpy past 2.x with them, which breaks every compiled
-# package -- opencv, torch's extensions -- built against the 1.x ABI. That
-# exact failure already cost this project three MuseTalk builds. Pin it here
-# too rather than trust one requirements.txt to hold the line by itself.
-numpy>=1.23.5,<2
